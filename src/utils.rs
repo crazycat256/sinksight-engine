@@ -1,0 +1,1111 @@
+//! Identifier resolution and shared AST helpers (port of `detectors/utils.ts`).
+
+use std::collections::HashSet;
+
+use oxc_ast::ast::*;
+use oxc_ast::AstKind;
+use oxc_semantic::{Reference, SymbolId};
+use oxc_span::{GetSpan, Span};
+
+use crate::ctx::{AnalysisCtx, ScopeId};
+
+/// Mirrors `KNOWN_GLOBALS` in `utils.ts`. Identifiers in this list are never
+/// treated as implicit-global candidates during resolution.
+pub const KNOWN_GLOBALS: &[&str] = &[
+    "window",
+    "document",
+    "console",
+    "Math",
+    "Object",
+    "Array",
+    "String",
+    "Number",
+    "Boolean",
+    "RegExp",
+    "setTimeout",
+    "setInterval",
+    "clearTimeout",
+    "clearInterval",
+    "eval",
+    "undefined",
+    "NaN",
+    "Infinity",
+    "global",
+    "globalThis",
+    "process",
+    "module",
+    "exports",
+    "require",
+    "HTMLElement",
+    "Element",
+    "Node",
+    "Event",
+    "JSON",
+    "Promise",
+    "Date",
+    "Symbol",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+];
+
+const MAX_RESOLVE_DEPTH: u32 = 30;
+
+// ---------------------------------------------------------------------------
+// Simple structural helpers (no scope needed)
+// ---------------------------------------------------------------------------
+
+/// Port of `getStaticKeyName`. Works for both object literal property keys
+/// and (via [`is_property_named`]) member expression properties.
+pub fn get_static_key_name<'a>(computed: bool, key: &PropertyKey<'a>) -> Option<&'a str> {
+    if !computed {
+        if let PropertyKey::StaticIdentifier(id) = key {
+            return Some(id.name.as_str());
+        }
+    }
+    if let PropertyKey::StringLiteral(lit) = key {
+        return Some(lit.value.as_str());
+    }
+    None
+}
+
+/// Port of `isPropertyNamed`. oxc's [`MemberExpression::static_property_name`]
+/// already unifies the "static identifier" and "computed string literal"
+/// cases for us.
+pub fn is_property_named(member: &MemberExpression, targets: &[&str]) -> bool {
+    member
+        .static_property_name()
+        .is_some_and(|name| targets.contains(&name))
+}
+
+/// Same as [`is_property_named`] but for an `AssignmentTarget`'s member-like
+/// variants (`a.b = x`, `a[b] = x`, `a.#b = x`), which oxc represents with a
+/// separate enum from `Expression`'s member variants.
+pub fn assignment_target_property_name<'a>(target: &'a AssignmentTarget<'a>) -> Option<&'a str> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(m) => Some(m.property.name.as_str()),
+        AssignmentTarget::ComputedMemberExpression(m) => {
+            m.static_property_name().map(|a| a.as_str())
+        }
+        _ => None,
+    }
+}
+
+/// Returns the object expression of an assignment target's member-like
+/// variants, or `None` for identifiers / destructuring patterns.
+pub fn assignment_target_object<'a>(
+    target: &'a AssignmentTarget<'a>,
+) -> Option<&'a Expression<'a>> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(m) => Some(&m.object),
+        AssignmentTarget::ComputedMemberExpression(m) => Some(&m.object),
+        AssignmentTarget::PrivateFieldExpression(m) => Some(&m.object),
+        _ => None,
+    }
+}
+
+/// Port of `matchesCalleeNames`. `callee` covers `Identifier`, member
+/// expressions, and (unlike Babel, which has a separate `t.Super`) `super`,
+/// since oxc's `Expression` already has a `Super` variant.
+pub fn matches_callee_names(callee: &Expression, targets: &[&str]) -> bool {
+    match callee {
+        Expression::Identifier(ident) => targets.contains(&ident.name.as_str()),
+        _ => callee
+            .get_member_expr()
+            .is_some_and(|m| is_property_named(m, targets)),
+    }
+}
+
+/// Strips parentheses/TS type-wrapper nodes, mirroring `unwrapExpression`.
+/// oxc is normally parsed with `preserve_parens: false` (see
+/// `sinksight_engine::parse`), so `ParenthesizedExpression` should not
+/// appear in practice, but we defensively unwrap it (and the TS assertion
+/// wrappers) anyway since detectors may run against ASTs parsed elsewhere.
+pub fn unwrap_expression<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::ParenthesizedExpression(e) => &e.expression,
+            Expression::TSAsExpression(e) => &e.expression,
+            Expression::TSSatisfiesExpression(e) => &e.expression,
+            Expression::TSNonNullExpression(e) => &e.expression,
+            Expression::TSTypeAssertion(e) => &e.expression,
+            Expression::TSInstantiationExpression(e) => &e.expression,
+            _ => return current,
+        };
+    }
+}
+
+/// Port of `isDocumentObject`.
+pub fn is_document_object(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(ident) => ident.name == "document",
+        _ => match expr.get_member_expr() {
+            Some(member) => {
+                is_property_named(member, &["document", "contentDocument"])
+                    || is_document_object(member.object())
+            }
+            None => false,
+        },
+    }
+}
+
+/// Port of `isWindowLike`. `scope_id` is used to check that the name isn't
+/// shadowed by a local binding (`!scope?.getBinding(name)` in Babel).
+pub fn is_window_like<'a>(ctx: &AnalysisCtx<'a>, expr: &Expression<'a>, scope_id: ScopeId) -> bool {
+    match expr {
+        Expression::Identifier(ident) => {
+            let name = ident.name.as_str();
+            matches!(
+                name,
+                "window" | "self" | "globalThis" | "top" | "parent" | "frames"
+            ) && ctx
+                .semantic
+                .scoping()
+                .find_binding(scope_id, name)
+                .is_none()
+        }
+        _ => false,
+    }
+}
+
+const LOCATION_PROPS: &[&str] = &["search", "hash", "href", "pathname"];
+const DOCUMENT_URL_PROPS: &[&str] = &["URL", "documentURI", "baseURI"];
+
+/// Port of `isGlobalLocation`.
+pub fn is_global_location<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &Expression<'a>,
+    scope_id: ScopeId,
+) -> bool {
+    match expr {
+        Expression::Identifier(ident) if ident.name == "location" => ctx
+            .semantic
+            .scoping()
+            .find_binding(scope_id, "location")
+            .is_none(),
+        _ => match expr.get_member_expr() {
+            Some(member) if is_property_named(member, &["location"]) => {
+                is_window_like(ctx, member.object(), scope_id)
+            }
+            _ => false,
+        },
+    }
+}
+
+/// Port of `isBrowserUrlSource`.
+pub fn is_browser_url_source<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &Expression<'a>,
+    scope_id: ScopeId,
+) -> bool {
+    if let Some(member) = expr.get_member_expr() {
+        if is_property_named(member, LOCATION_PROPS)
+            && is_global_location(ctx, member.object(), scope_id)
+        {
+            return true;
+        }
+        if is_property_named(member, DOCUMENT_URL_PROPS) && is_document_object(member.object()) {
+            return true;
+        }
+        if is_property_named(member, &["location"])
+            && is_window_like(ctx, member.object(), scope_id)
+        {
+            return true;
+        }
+    }
+    if let Expression::Identifier(ident) = expr {
+        if ident.name == "location" {
+            return ctx
+                .semantic
+                .scoping()
+                .find_binding(scope_id, "location")
+                .is_none();
+        }
+    }
+    false
+}
+
+/// Port of `startsWithVariable`.
+pub fn starts_with_variable(expr: &Expression) -> bool {
+    let unwrapped = unwrap_expression_ref(expr);
+    match unwrapped {
+        Expression::StringLiteral(_) => false,
+        Expression::TemplateLiteral(lit) => match lit.quasis.first() {
+            None => true,
+            Some(first) => first.value.raw.is_empty(),
+        },
+        Expression::BinaryExpression(bin) if bin.operator == BinaryOperator::Addition => {
+            starts_with_variable(&bin.left)
+        }
+        _ => true,
+    }
+}
+
+// `unwrap_expression` requires `&'a Expression<'a>` (arena-lifetime) so it
+// can be used for resolution chains; this variant works on any borrow for
+// call sites (like `starts_with_variable`) that only need to peek.
+fn unwrap_expression_ref<'b>(expr: &'b Expression<'b>) -> &'b Expression<'b> {
+    let mut current = expr;
+    loop {
+        current = match current {
+            Expression::ParenthesizedExpression(e) => &e.expression,
+            Expression::TSAsExpression(e) => &e.expression,
+            Expression::TSSatisfiesExpression(e) => &e.expression,
+            Expression::TSNonNullExpression(e) => &e.expression,
+            Expression::TSTypeAssertion(e) => &e.expression,
+            Expression::TSInstantiationExpression(e) => &e.expression,
+            _ => return current,
+        };
+    }
+}
+
+/// Port of `hasSafeUrlPrefix`.
+pub fn has_safe_url_prefix<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &'a Expression<'a>,
+    scope_id: ScopeId,
+) -> bool {
+    let Some(literal) = get_leading_literal_text(ctx, expr, scope_id) else {
+        return false;
+    };
+    let lower = literal.to_lowercase();
+    const JS_SCHEME: &str = "javascript:";
+    if lower.starts_with(JS_SCHEME) {
+        return false;
+    }
+    if JS_SCHEME.starts_with(&lower) {
+        return false;
+    }
+    true
+}
+
+fn get_leading_literal_text<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &'a Expression<'a>,
+    scope_id: ScopeId,
+) -> Option<String> {
+    let unwrapped = unwrap_expression(expr);
+    let resolved = resolve_identifier(ctx, unwrapped, scope_id);
+    match resolved {
+        Expression::StringLiteral(lit) => Some(lit.value.to_string()),
+        Expression::TemplateLiteral(lit) => {
+            let first = lit.quasis.first()?;
+            let text = first
+                .value
+                .cooked
+                .map(|a| a.to_string())
+                .unwrap_or_default();
+            if text.is_empty() {
+                None
+            } else {
+                Some(text)
+            }
+        }
+        Expression::BinaryExpression(bin) if bin.operator == BinaryOperator::Addition => {
+            get_leading_literal_text(ctx, &bin.left, scope_id)
+        }
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// isStaticStringExpression
+// ---------------------------------------------------------------------------
+
+/// Port of `isStaticStringExpression`.
+pub fn is_static_string_expression<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &'a Expression<'a>,
+    scope_id: ScopeId,
+) -> bool {
+    is_static_string_expression_inner(ctx, expr, scope_id, &mut HashSet::new())
+}
+
+fn is_static_string_expression_inner<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &'a Expression<'a>,
+    scope_id: ScopeId,
+    visited: &mut HashSet<String>,
+) -> bool {
+    let unwrapped = unwrap_expression(expr);
+    let resolved = resolve_identifier_inner(ctx, unwrapped, scope_id, visited, 0);
+
+    match resolved {
+        Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral(_)
+        | Expression::RegExpLiteral(_)
+        | Expression::BigIntLiteral(_) => true,
+        Expression::Identifier(ident) if ident.name == "undefined" => true,
+        Expression::TemplateLiteral(lit) => lit
+            .expressions
+            .iter()
+            .all(|e| is_static_string_expression_inner(ctx, e, scope_id, visited)),
+        Expression::BinaryExpression(bin) if bin.operator == BinaryOperator::Addition => {
+            is_static_string_expression_inner(ctx, &bin.left, scope_id, visited)
+                && is_static_string_expression_inner(ctx, &bin.right, scope_id, visited)
+        }
+        Expression::ConditionalExpression(cond) => {
+            is_static_string_expression_inner(ctx, &cond.consequent, scope_id, visited)
+                && is_static_string_expression_inner(ctx, &cond.alternate, scope_id, visited)
+        }
+        Expression::LogicalExpression(logical) => {
+            is_static_string_expression_inner(ctx, &logical.left, scope_id, visited)
+                && is_static_string_expression_inner(ctx, &logical.right, scope_id, visited)
+        }
+        Expression::CallExpression(call) => {
+            if let Expression::Identifier(callee) = &call.callee {
+                if callee.name == "String" && call.arguments.len() == 1 {
+                    if let Some(arg) = call.arguments[0].as_expression() {
+                        return is_static_string_expression_inner(ctx, arg, scope_id, visited);
+                    }
+                }
+            }
+            if let Some(member) = call.callee.get_member_expr() {
+                if is_property_named(member, &["concat"]) {
+                    if !is_static_string_expression_inner(ctx, member.object(), scope_id, visited) {
+                        return false;
+                    }
+                    return call.arguments.iter().all(|a| match a.as_expression() {
+                        Some(e) => is_static_string_expression_inner(ctx, e, scope_id, visited),
+                        None => false,
+                    });
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// resolve_identifier - the core constant-folding engine
+// ---------------------------------------------------------------------------
+
+/// Result of resolving an IIFE parameter to its call-site argument. Mirrors
+/// Babel's `{ arg, scope } | { arg: null, scope: null } | null` union, but
+/// `None` (the outer `Option`) plays the role of the "not an IIFE param"
+/// `null`, while `arg: None` plays the role of the "missing argument"
+/// (`undefined`) case.
+pub struct ParamResolution<'a> {
+    pub arg: Option<&'a Expression<'a>>,
+    pub scope_id: ScopeId,
+}
+
+/// Result of resolving a named function's parameter across all of its
+/// (non-escaping) call sites.
+pub struct NamedParamResolution<'a> {
+    pub args: Vec<Option<&'a Expression<'a>>>,
+    pub scope_id: ScopeId,
+}
+
+/// Port of `resolveIdentifier`. See module docs for the general approach.
+pub fn resolve_identifier<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &'a Expression<'a>,
+    scope_id: ScopeId,
+) -> &'a Expression<'a> {
+    resolve_identifier_inner(ctx, expr, scope_id, &mut HashSet::new(), 0)
+}
+
+fn resolve_identifier_inner<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &'a Expression<'a>,
+    scope_id: ScopeId,
+    visited: &mut HashSet<String>,
+    depth: u32,
+) -> &'a Expression<'a> {
+    if depth > MAX_RESOLVE_DEPTH {
+        return expr;
+    }
+
+    if let Expression::AssignmentExpression(assign) = expr {
+        return resolve_identifier_inner(ctx, &assign.right, scope_id, visited, depth + 1);
+    }
+
+    if let Expression::SequenceExpression(seq) = expr {
+        if let Some(last) = seq.expressions.last() {
+            return resolve_identifier_inner(ctx, last, scope_id, visited, depth + 1);
+        }
+    }
+
+    if let Some(member) = expr.get_member_expr() {
+        // Quick path: `obj.prop` where `obj` is a constant, "safe" object
+        // literal whose relevant property was never (statically provably)
+        // mutated.
+        if let Expression::Identifier(obj_ident) = member.object() {
+            if let Some(symbol_id) = ctx
+                .semantic
+                .scoping()
+                .find_binding(scope_id, &obj_ident.name)
+            {
+                if let Some(Expression::ObjectExpression(obj)) = declarator_init(ctx, symbol_id) {
+                    if is_safe_object_expression(obj)
+                        && !ctx.semantic.scoping().symbol_is_mutated(symbol_id)
+                    {
+                        if let Some(mutated) = get_mutated_properties(ctx, symbol_id) {
+                            if let Some(prop_name) = member.static_property_name() {
+                                if !mutated.contains(prop_name) {
+                                    if let Some(value) = find_object_property_value(obj, prop_name)
+                                    {
+                                        return resolve_identifier_inner(
+                                            ctx,
+                                            value,
+                                            scope_id,
+                                            visited,
+                                            depth + 1,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Generic fallback: resolve the object; if it becomes an object
+        // literal, look the property straight up.
+        let resolved_obj =
+            resolve_identifier_inner(ctx, member.object(), scope_id, visited, depth + 1);
+        if let Expression::ObjectExpression(obj) = resolved_obj {
+            if let Some(prop_name) = member.static_property_name() {
+                if let Some(value) = find_object_property_value(obj, prop_name) {
+                    return resolve_identifier_inner(ctx, value, scope_id, visited, depth + 1);
+                }
+            }
+        }
+
+        // `this.prop` resolution: look for the first `this.prop = value`
+        // assignment inside the enclosing scope's subtree.
+        if matches!(member.object(), Expression::ThisExpression(_)) {
+            if let Some(prop_name) = member.static_property_name() {
+                let key = format!("this.{prop_name}");
+                if !visited.contains(&key) {
+                    visited.insert(key);
+                    if let Some(value) = resolve_this_property(ctx, scope_id, prop_name) {
+                        return resolve_identifier_inner(ctx, value, scope_id, visited, depth + 1);
+                    }
+                }
+            }
+        }
+    }
+
+    let Expression::Identifier(ident) = expr else {
+        return expr;
+    };
+    let name = ident.name.as_str();
+    if visited.contains(name) {
+        return expr;
+    }
+    visited.insert(name.to_string());
+
+    let scoping = ctx.semantic.scoping();
+    let Some(symbol_id) = scoping.find_binding(scope_id, name) else {
+        if !KNOWN_GLOBALS.contains(&name) {
+            if let Some(value) = resolve_implicit_global(ctx, name) {
+                return resolve_identifier_inner(ctx, value, scope_id, visited, depth + 1);
+            }
+        }
+        return expr;
+    };
+
+    if let Some(resolution) = resolve_iife_param(ctx, symbol_id) {
+        return match resolution.arg {
+            Some(arg) => {
+                resolve_identifier_inner(ctx, arg, resolution.scope_id, visited, depth + 1)
+            }
+            None => ctx.undefined_expr(),
+        };
+    }
+
+    if let Some(named) = resolve_named_function_param(ctx, symbol_id) {
+        if named.args.len() == 1 {
+            return match named.args[0] {
+                Some(arg) => resolve_identifier_inner(ctx, arg, named.scope_id, visited, depth + 1),
+                None => ctx.undefined_expr(),
+            };
+        }
+        if !named.args.is_empty() && named.args.iter().all(Option::is_none) {
+            return ctx.undefined_expr();
+        }
+        if let Some(first) = named.args.iter().flatten().next() {
+            let all_same_kind = named.args.iter().all(|a| match a {
+                Some(e) => expr_kind_name(e) == expr_kind_name(first),
+                None => false,
+            });
+            if all_same_kind {
+                return resolve_identifier_inner(ctx, first, named.scope_id, visited, depth + 1);
+            }
+        }
+    }
+
+    let is_constant_ish = !scoping.symbol_is_mutated(symbol_id)
+        || has_only_trivial_self_assignments(ctx, symbol_id, name);
+    if is_constant_ish {
+        if let Some(init) = declarator_init(ctx, symbol_id) {
+            if let Expression::ObjectExpression(obj) = init {
+                if !is_safe_object_expression(obj) {
+                    return expr;
+                }
+                match get_mutated_properties(ctx, symbol_id) {
+                    None => return expr,
+                    Some(mutated) if !mutated.is_empty() => return expr,
+                    Some(_) => {}
+                }
+            }
+            return resolve_identifier_inner(ctx, init, scope_id, visited, depth + 1);
+        }
+    }
+
+    expr
+}
+
+/// Coarse-grained "same AST node kind" comparison, used to decide whether
+/// multiple call-site arguments can be treated as representative of a single
+/// value for type-inference purposes (mirrors Babel's `arg.type` check).
+fn expr_kind_name(expr: &Expression) -> &'static str {
+    match expr {
+        Expression::StringLiteral(_) => "StringLiteral",
+        Expression::NumericLiteral(_) => "NumericLiteral",
+        Expression::BooleanLiteral(_) => "BooleanLiteral",
+        Expression::NullLiteral(_) => "NullLiteral",
+        Expression::BigIntLiteral(_) => "BigIntLiteral",
+        Expression::RegExpLiteral(_) => "RegExpLiteral",
+        Expression::TemplateLiteral(_) => "TemplateLiteral",
+        Expression::ArrayExpression(_) => "ArrayExpression",
+        Expression::ObjectExpression(_) => "ObjectExpression",
+        Expression::Identifier(_) => "Identifier",
+        Expression::FunctionExpression(_) => "FunctionExpression",
+        Expression::ArrowFunctionExpression(_) => "ArrowFunctionExpression",
+        _ => "Other",
+    }
+}
+
+/// Resolves `expr` and, if it resolves to an object literal, returns it.
+/// Port of `resolveToObject`.
+pub fn resolve_to_object<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &'a Expression<'a>,
+    scope_id: ScopeId,
+) -> Option<&'a ObjectExpression<'a>> {
+    let resolved = resolve_identifier(ctx, expr, scope_id);
+    if let Expression::ObjectExpression(obj) = resolved {
+        return Some(obj);
+    }
+    if let Expression::Identifier(ident) = resolved {
+        let symbol_id = ctx.semantic.scoping().find_binding(scope_id, &ident.name)?;
+        if !ctx.semantic.scoping().symbol_is_mutated(symbol_id) {
+            if let Some(Expression::ObjectExpression(obj)) = declarator_init(ctx, symbol_id) {
+                return Some(obj);
+            }
+        }
+    }
+    None
+}
+
+fn find_object_property_value<'a>(
+    obj: &'a ObjectExpression<'a>,
+    prop_name: &str,
+) -> Option<&'a Expression<'a>> {
+    for prop in &obj.properties {
+        if let ObjectPropertyKind::ObjectProperty(op) = prop {
+            if let Some(key_name) = get_static_key_name(op.computed, &op.key) {
+                if key_name == prop_name {
+                    return Some(&op.value);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Port of `isSafeObjectExpression`: no spreads, no getters/setters (regular
+/// methods are fine since a function value can't itself become a string).
+fn is_safe_object_expression(obj: &ObjectExpression) -> bool {
+    obj.properties.iter().all(|prop| match prop {
+        ObjectPropertyKind::SpreadProperty(_) => false,
+        ObjectPropertyKind::ObjectProperty(p) => {
+            !(matches!(p.kind, PropertyKind::Get | PropertyKind::Set))
+        }
+    })
+}
+
+/// Returns the initializer of a `VariableDeclarator`-bound symbol, or `None`
+/// if the symbol isn't declared that way (e.g. it's a parameter, catch
+/// clause binding, import, etc) or has no initializer.
+pub(crate) fn declarator_init<'a>(
+    ctx: &AnalysisCtx<'a>,
+    symbol_id: SymbolId,
+) -> Option<&'a Expression<'a>> {
+    let scoping = ctx.semantic.scoping();
+    let nodes = ctx.semantic.nodes();
+    let node_id = scoping.symbol_declaration(symbol_id);
+    match nodes.kind(node_id) {
+        AstKind::VariableDeclarator(decl) => decl.init.as_ref(),
+        _ => None,
+    }
+}
+
+/// Whether `symbol_id` is bound by a `VariableDeclarator` (`var`/`let`/
+/// `const x = ...`), regardless of whether it has an initializer. Mirrors
+/// the TS `binding.path.isVariableDeclarator()` check in `safety.ts`.
+pub(crate) fn is_variable_declarator_binding(ctx: &AnalysisCtx, symbol_id: SymbolId) -> bool {
+    let scoping = ctx.semantic.scoping();
+    let nodes = ctx.semantic.nodes();
+    matches!(
+        nodes.kind(scoping.symbol_declaration(symbol_id)),
+        AstKind::VariableDeclarator(_)
+    )
+}
+
+/// Whether `symbol_id` is bound by a `FormalParameter`. Mirrors the TS
+/// `binding.kind === "param"` check in `safety.ts`.
+pub(crate) fn is_parameter_binding(ctx: &AnalysisCtx, symbol_id: SymbolId) -> bool {
+    let scoping = ctx.semantic.scoping();
+    let nodes = ctx.semantic.nodes();
+    matches!(
+        nodes.kind(scoping.symbol_declaration(symbol_id)),
+        AstKind::FormalParameter(_)
+    )
+}
+
+/// Port of `getMutatedProperties`.
+///
+/// Returns `None` when mutation-safety cannot be established at all (the
+/// binding should be treated as fully unsafe to read through), or
+/// `Some(set)` of property names that are known to be mutated/escaped
+/// somewhere in the program (an empty set means "provably never mutated").
+///
+/// Simplification vs. the TS original: property-chain depth tracking is
+/// preserved (`obj.a.b = x` invalidates everything, matching Babel), but the
+/// "lambda passed to an opaque call escapes the object" check only looks at
+/// the *direct* enclosing function of each reference, not the full ancestor
+/// chain of nested closures. This trades a small amount of precision for
+/// avoiding a potentially expensive unbounded walk; it never *under*-reports
+/// mutation (i.e. it stays sound, at worst slightly more conservative).
+fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<HashSet<String>> {
+    let scoping = ctx.semantic.scoping();
+    let nodes = ctx.semantic.nodes();
+    let mut mutated = HashSet::new();
+
+    for reference in scoping.get_resolved_references(symbol_id) {
+        let ref_node_id = reference.node_id();
+        let ref_span = nodes.kind(ref_node_id).span();
+
+        // Walk up through consecutive member-expression parents (obj.a.b...)
+        // to find the outermost link in the chain, tracking depth.
+        let mut current_id = ref_node_id;
+        let mut current_span = ref_span;
+        let mut depth = 0u32;
+        loop {
+            let parent_id = nodes.parent_id(current_id);
+            match nodes.kind(parent_id) {
+                AstKind::StaticMemberExpression(_)
+                | AstKind::ComputedMemberExpression(_)
+                | AstKind::PrivateFieldExpression(_) => {
+                    depth += 1;
+                    current_id = parent_id;
+                    current_span = nodes.kind(parent_id).span();
+                }
+                _ => break,
+            }
+        }
+
+        if depth == 0 {
+            // Port of the TS upfront check: every reference to a trackable
+            // binding must be the `object` of a `MemberExpression`, or the
+            // whole binding is invalidated. This covers cases like `foo(obj)`
+            // or `const b = obj` where the object itself escapes untracked,
+            // not just closures passed to opaque calls.
+            return None;
+        }
+
+        let parent_id = nodes.parent_id(current_id);
+        let parent_kind = nodes.kind(parent_id);
+
+        let prop_name_at_depth_1 = if depth == 1 {
+            member_property_name_for_object_span(nodes, current_id, ref_span)
+        } else {
+            None
+        };
+
+        match parent_kind {
+            AstKind::AssignmentExpression(assign)
+                if assignment_target_span(&assign.left) == Some(current_span) =>
+            {
+                if depth > 1 {
+                    return None;
+                }
+                match prop_name_at_depth_1 {
+                    Some(name) if name != "__proto__" => {
+                        mutated.insert(name.to_string());
+                    }
+                    _ => return None,
+                }
+            }
+            AstKind::UpdateExpression(update)
+                if simple_target_span(&update.argument) == Some(current_span) =>
+            {
+                if depth > 1 {
+                    return None;
+                }
+                match prop_name_at_depth_1 {
+                    Some(name) if name != "__proto__" => {
+                        mutated.insert(name.to_string());
+                    }
+                    _ => return None,
+                }
+            }
+            AstKind::UnaryExpression(unary)
+                if unary.operator == UnaryOperator::Delete
+                    && unary.argument.span() == current_span =>
+            {
+                if depth > 1 {
+                    return None;
+                }
+                match prop_name_at_depth_1 {
+                    Some(name) if name != "__proto__" => {
+                        mutated.insert(name.to_string());
+                    }
+                    _ => return None,
+                }
+            }
+            AstKind::CallExpression(call) => {
+                if call.callee.span() == current_span {
+                    // `obj.method()` — invalidate everything, we don't know
+                    // what the method does to the receiver.
+                    return None;
+                }
+                if call
+                    .arguments
+                    .iter()
+                    .any(|a| a.as_expression().is_some_and(|e| e.span() == current_span))
+                {
+                    if depth > 1 {
+                        return None;
+                    }
+                    match prop_name_at_depth_1 {
+                        Some(name) => {
+                            mutated.insert(name.to_string());
+                        }
+                        None => return None,
+                    }
+                }
+            }
+            AstKind::NewExpression(new_expr) => {
+                if new_expr
+                    .arguments
+                    .iter()
+                    .any(|a| a.as_expression().is_some_and(|e| e.span() == current_span))
+                {
+                    if depth > 1 {
+                        return None;
+                    }
+                    match prop_name_at_depth_1 {
+                        Some(name) => {
+                            mutated.insert(name.to_string());
+                        }
+                        None => return None,
+                    }
+                }
+            }
+            _ => {
+                if reference_escapes_into_opaque_call(nodes, ref_node_id) {
+                    return None;
+                }
+            }
+        }
+    }
+
+    Some(mutated)
+}
+
+pub(crate) fn assignment_target_span(target: &AssignmentTarget) -> Option<Span> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(m) => Some(m.span),
+        AssignmentTarget::ComputedMemberExpression(m) => Some(m.span),
+        AssignmentTarget::PrivateFieldExpression(m) => Some(m.span),
+        _ => None,
+    }
+}
+
+fn simple_target_span(target: &SimpleAssignmentTarget) -> Option<Span> {
+    match target {
+        SimpleAssignmentTarget::StaticMemberExpression(m) => Some(m.span),
+        SimpleAssignmentTarget::ComputedMemberExpression(m) => Some(m.span),
+        SimpleAssignmentTarget::PrivateFieldExpression(m) => Some(m.span),
+        _ => None,
+    }
+}
+
+/// Given the node id of the depth-1 member expression wrapping `ref_span`
+/// (i.e. `obj.prop` where `obj` is at `ref_span`), returns `prop`'s static
+/// name, if any.
+fn member_property_name_for_object_span<'a>(
+    nodes: &oxc_semantic::AstNodes<'a>,
+    member_node_id: oxc_semantic::NodeId,
+    _object_span: Span,
+) -> Option<&'a str> {
+    match nodes.kind(member_node_id) {
+        AstKind::StaticMemberExpression(m) => Some(m.property.name.as_str()),
+        AstKind::ComputedMemberExpression(m) => m.static_property_name().map(|a| a.as_str()),
+        _ => None,
+    }
+}
+
+/// Approximates Babel's "is this reference read inside a closure that is
+/// itself passed to an opaque call" escape check, but only for the direct
+/// enclosing function (see [`get_mutated_properties`] doc comment).
+fn reference_escapes_into_opaque_call(
+    nodes: &oxc_semantic::AstNodes,
+    ref_node_id: oxc_semantic::NodeId,
+) -> bool {
+    for ancestor_id in nodes.ancestor_ids(ref_node_id) {
+        let (fn_span, is_function) = match nodes.kind(ancestor_id) {
+            AstKind::Function(f) => (f.span, true),
+            AstKind::ArrowFunctionExpression(f) => (f.span, true),
+            AstKind::Program(_) => (Span::default(), false),
+            _ => continue,
+        };
+        if !is_function {
+            break;
+        }
+        let parent_id = nodes.parent_id(ancestor_id);
+        let escapes = match nodes.kind(parent_id) {
+            AstKind::CallExpression(call) => call
+                .arguments
+                .iter()
+                .any(|a| a.as_expression().is_some_and(|e| e.span() == fn_span)),
+            AstKind::NewExpression(new_expr) => new_expr
+                .arguments
+                .iter()
+                .any(|a| a.as_expression().is_some_and(|e| e.span() == fn_span)),
+            _ => false,
+        };
+        if escapes {
+            return true;
+        }
+    }
+    false
+}
+
+/// Port of `hasOnlyTrivialSelfAssignments`.
+fn has_only_trivial_self_assignments(ctx: &AnalysisCtx, symbol_id: SymbolId, name: &str) -> bool {
+    let scoping = ctx.semantic.scoping();
+    let nodes = ctx.semantic.nodes();
+    let mut has_any = false;
+    for reference in scoping.get_resolved_references(symbol_id) {
+        if !reference.is_write() {
+            continue;
+        }
+        has_any = true;
+        let parent_id = nodes.parent_id(reference.node_id());
+        let is_trivial = matches!(
+            nodes.kind(parent_id),
+            AstKind::AssignmentExpression(assign)
+                if assign.operator == AssignmentOperator::Assign
+                    && matches!(&assign.left, AssignmentTarget::AssignmentTargetIdentifier(l) if l.name == name)
+                    && matches!(&assign.right, Expression::Identifier(r) if r.name == name)
+        );
+        if !is_trivial {
+            return false;
+        }
+    }
+    has_any
+}
+
+/// Port of `resolveIIFEParam`.
+pub(crate) fn resolve_iife_param<'a>(
+    ctx: &AnalysisCtx<'a>,
+    symbol_id: SymbolId,
+) -> Option<ParamResolution<'a>> {
+    let scoping = ctx.semantic.scoping();
+    if scoping.symbol_is_mutated(symbol_id) {
+        return None;
+    }
+    let nodes = ctx.semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(symbol_id);
+    let AstKind::FormalParameter(param) = nodes.kind(decl_node_id) else {
+        return None;
+    };
+    let params_node_id = nodes.parent_id(decl_node_id);
+    let AstKind::FormalParameters(params) = nodes.kind(params_node_id) else {
+        return None;
+    };
+    let fn_node_id = nodes.parent_id(params_node_id);
+    let fn_span = match nodes.kind(fn_node_id) {
+        AstKind::Function(f) => {
+            if f.id.is_some() {
+                return None;
+            }
+            f.span
+        }
+        AstKind::ArrowFunctionExpression(f) => f.span,
+        _ => return None,
+    };
+    let call_node_id = nodes.parent_id(fn_node_id);
+    let AstKind::CallExpression(call) = nodes.kind(call_node_id) else {
+        return None;
+    };
+    if call.callee.span() != fn_span {
+        return None;
+    }
+    if call
+        .arguments
+        .iter()
+        .any(|a| matches!(a, Argument::SpreadElement(_)))
+    {
+        return None;
+    }
+    let param_index = params.items.iter().position(|p| p.span == param.span)?;
+    let call_scope_id = nodes.get_node(call_node_id).scope_id();
+    match call.arguments.get(param_index) {
+        Some(arg) => Some(ParamResolution {
+            arg: arg.as_expression(),
+            scope_id: call_scope_id,
+        }),
+        None => Some(ParamResolution {
+            arg: None,
+            scope_id: call_scope_id,
+        }),
+    }
+}
+
+/// Port of `resolveNamedFunctionParam`.
+pub(crate) fn resolve_named_function_param<'a>(
+    ctx: &AnalysisCtx<'a>,
+    symbol_id: SymbolId,
+) -> Option<NamedParamResolution<'a>> {
+    let scoping = ctx.semantic.scoping();
+    let nodes = ctx.semantic.nodes();
+    let decl_node_id = scoping.symbol_declaration(symbol_id);
+    let AstKind::FormalParameter(param) = nodes.kind(decl_node_id) else {
+        return None;
+    };
+    let params_node_id = nodes.parent_id(decl_node_id);
+    let AstKind::FormalParameters(params) = nodes.kind(params_node_id) else {
+        return None;
+    };
+    let fn_node_id = nodes.parent_id(params_node_id);
+    let AstKind::Function(function) = nodes.kind(fn_node_id) else {
+        return None;
+    };
+    let fn_id = function.id.as_ref()?;
+    let fn_name = fn_id.name.as_str();
+
+    let outer_scope_id = nodes.get_node(fn_node_id).scope_id();
+    let fn_symbol_id = scoping.find_binding(outer_scope_id, fn_name)?;
+
+    let refs: Vec<&Reference> = scoping
+        .get_resolved_references(fn_symbol_id)
+        .filter(|r| r.is_read())
+        .collect();
+    if refs.is_empty() {
+        return None;
+    }
+
+    let param_index = params.items.iter().position(|p| p.span == param.span)?;
+
+    let mut args = Vec::with_capacity(refs.len());
+    let mut call_scope_id = outer_scope_id;
+    for reference in refs {
+        let ref_node_id = reference.node_id();
+        let ref_span = nodes.kind(ref_node_id).span();
+        let call_node_id = nodes.parent_id(ref_node_id);
+        let AstKind::CallExpression(call) = nodes.kind(call_node_id) else {
+            return None;
+        };
+        if call.callee.span() != ref_span {
+            return None;
+        }
+        if call
+            .arguments
+            .iter()
+            .any(|a| matches!(a, Argument::SpreadElement(_)))
+        {
+            return None;
+        }
+        args.push(
+            call.arguments
+                .get(param_index)
+                .and_then(|a| a.as_expression()),
+        );
+        call_scope_id = nodes.get_node(call_node_id).scope_id();
+    }
+
+    Some(NamedParamResolution {
+        args,
+        scope_id: call_scope_id,
+    })
+}
+
+/// Port of the implicit-global-assignment lookup inside `resolveIdentifier`.
+///
+/// Uses `Scoping::root_unresolved_references`, which already gives us
+/// exactly the set of identifier references that could not be resolved to
+/// any declared binding (i.e. Babel's `!binding` case) — no whole-program
+/// re-scan required.
+fn resolve_implicit_global<'a>(ctx: &AnalysisCtx<'a>, name: &str) -> Option<&'a Expression<'a>> {
+    let scoping = ctx.semantic.scoping();
+    let nodes = ctx.semantic.nodes();
+    let mut found: Option<&'a Expression<'a>> = None;
+
+    for (ref_name, ref_ids) in scoping.root_unresolved_references() {
+        if *ref_name != name {
+            continue;
+        }
+        for &ref_id in ref_ids.iter() {
+            let reference = scoping.get_reference(ref_id);
+            if !reference.is_write() {
+                continue;
+            }
+            let node_id = reference.node_id();
+            let parent_id = nodes.parent_id(node_id);
+            if let AstKind::AssignmentExpression(assign) = nodes.kind(parent_id) {
+                if let AssignmentTarget::AssignmentTargetIdentifier(target) = &assign.left {
+                    if target.name == name {
+                        if found.is_some() {
+                            // Ambiguous: multiple implicit-global assignments.
+                            return None;
+                        }
+                        found = Some(&assign.right);
+                    }
+                }
+            }
+        }
+    }
+
+    found
+}
+
+/// Port of the `this.prop` resolution branch inside `resolveIdentifier`.
+/// Scans every AST node for the first `this.prop = value` assignment that is
+/// a descendant of the node that created `scope_id`.
+fn resolve_this_property<'a>(
+    ctx: &AnalysisCtx<'a>,
+    scope_id: ScopeId,
+    prop_name: &str,
+) -> Option<&'a Expression<'a>> {
+    let scoping = ctx.semantic.scoping();
+    let nodes = ctx.semantic.nodes();
+    let root_node_id = scoping.get_node_id(scope_id);
+
+    for node in nodes.iter() {
+        if let AstKind::AssignmentExpression(assign) = node.kind() {
+            if let AssignmentTarget::StaticMemberExpression(member) = &assign.left {
+                if matches!(member.object, Expression::ThisExpression(_))
+                    && member.property.name == prop_name
+                    && (root_node_id == node.id()
+                        || nodes.ancestor_ids(node.id()).any(|id| id == root_node_id))
+                {
+                    return Some(&assign.right);
+                }
+            }
+        }
+    }
+    None
+}

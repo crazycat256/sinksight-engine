@@ -1,0 +1,55 @@
+//! Port of `packages/vscode-ext/test/detectors/documentWrite.test.ts`.
+
+mod common;
+use common::count_detector;
+
+const D: &str = "documentWrite";
+
+#[test]
+fn detects_dynamic_document_write() {
+    assert_eq!(count_detector("document.write(payload)", D), 1);
+}
+
+#[test]
+fn detects_dynamic_document_writeln() {
+    assert_eq!(count_detector("document.writeln(payload)", D), 1);
+}
+
+#[test]
+fn detects_dynamic_window_document_write() {
+    assert_eq!(count_detector("window.document.write(payload)", D), 1);
+}
+
+#[test]
+fn detects_nested_content_document_writeln() {
+    assert_eq!(
+        count_detector("iframe.contentDocument.writeln(payload)", D),
+        1
+    );
+}
+
+#[test]
+fn ignores_static_document_write() {
+    assert_eq!(count_detector("document.write('<p>safe</p>')", D), 0);
+}
+
+#[test]
+fn ignores_static_template_literal() {
+    assert_eq!(count_detector("document.write(`safe`)", D), 0);
+}
+
+#[test]
+fn detects_dynamic_template_literal() {
+    assert_eq!(count_detector("document.write(`safe ${payload}`)", D), 1);
+}
+
+#[test]
+fn ignores_variable_resolving_to_static_string() {
+    let code = r#"
+        const part1 = "<script>";
+        const part2 = "console.log('safe')";
+        const part3 = "</script>";
+        document.write(part1 + part2 + part3);
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
