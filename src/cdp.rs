@@ -13,6 +13,32 @@ use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 type SocketSink =
     futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 
+#[derive(Debug)]
+struct CommandError {
+    code: i64,
+    message: String,
+}
+
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "CDP command failed ({}): {}",
+            self.code, self.message
+        )
+    }
+}
+
+impl std::error::Error for CommandError {}
+
+pub fn has_error_code(error: &anyhow::Error, code: i64) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<CommandError>()
+            .is_some_and(|error| error.code == code)
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct Event {
     pub method: String,
@@ -56,7 +82,15 @@ impl Client {
                 if let Some(id) = value.get("id").and_then(Value::as_u64) {
                     if let Some(sender) = pending.lock().await.remove(&id) {
                         let result = if let Some(error) = value.get("error") {
-                            Err(anyhow!("CDP command failed: {error}"))
+                            Err(CommandError {
+                                code: error.get("code").and_then(Value::as_i64).unwrap_or(0),
+                                message: error
+                                    .get("message")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("unknown CDP error")
+                                    .to_owned(),
+                            }
+                            .into())
                         } else {
                             Ok(value.get("result").cloned().unwrap_or(Value::Null))
                         };

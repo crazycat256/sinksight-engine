@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,7 +11,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
-use crate::cdp::{Client, Event};
+use crate::cdp::{has_error_code, Client, Event};
 use crate::store::{CapturedScript, Store};
 use crate::Analyzer;
 
@@ -44,6 +45,7 @@ struct Runtime {
     analyzer: Analyzer,
     max_script_bytes: usize,
     semaphore: Semaphore,
+    unavailable_source_reported: AtomicBool,
 }
 
 pub async fn run(config: Config) -> Result<()> {
@@ -57,6 +59,7 @@ pub async fn run(config: Config) -> Result<()> {
         analyzer,
         max_script_bytes: config.max_script_bytes,
         semaphore: Semaphore::new(config.analysis_concurrency.max(1)),
+        unavailable_source_reported: AtomicBool::new(false),
     });
     runtime.store.lock().await.export()?;
 
@@ -74,8 +77,13 @@ pub async fn run(config: Config) -> Result<()> {
             }
         };
         waiting_for_chromium = false;
+        runtime
+            .unavailable_source_reported
+            .store(false, Ordering::Relaxed);
         if let Err(error) = collect_connection(&endpoint, config.mode, runtime.clone()).await {
-            eprintln!("CDP collection failed: {error:#}");
+            if !is_connection_transition(&error) {
+                eprintln!("CDP collection failed: {error:#}");
+            }
         }
         runtime.targets.write().await.clear();
         runtime.network_scripts.lock().await.clear();
@@ -139,13 +147,20 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                 if let Err(error) =
                     configure_target(&client, &session, &target, mode, runtime).await
                 {
-                    eprintln!("Cannot configure target {}: {error:#}", target.url);
+                    if !has_error_code(&error, -32001) {
+                        eprintln!("Cannot configure target {}: {error:#}", target.url);
+                    }
                 }
             });
         }
         "Target.detachedFromTarget" => {
             if let Some(session) = field(&event.params, "sessionId") {
                 runtime.targets.write().await.remove(&session);
+                runtime
+                    .network_scripts
+                    .lock()
+                    .await
+                    .retain(|(target_session, _), _| target_session != &session);
             }
         }
         "Page.frameNavigated" => {
@@ -179,6 +194,9 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                 return;
             }
             let page_url = page_url(&runtime, &session).await;
+            if ignored_url(&page_url) {
+                return;
+            }
             tokio::spawn(async move {
                 let result = client
                     .call(
@@ -194,6 +212,9 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                         .context("missing scriptSource")
                 }) {
                     Ok(source) => process(runtime, source, script_url, page_url).await,
+                    Err(error) if source_unavailable(&error) => {
+                        report_unavailable_source(&runtime);
+                    }
                     Err(error) => eprintln!("Cannot retrieve script source: {error:#}"),
                 }
             });
@@ -213,6 +234,9 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                 return;
             }
             let page = page_url(&runtime, &session).await;
+            if ignored_url(&page) {
+                return;
+            }
             runtime
                 .network_scripts
                 .lock()
@@ -244,9 +268,25 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                     .await;
                 match result.and_then(decode_body) {
                     Ok(source) => process(runtime, source, script_url, page_url).await,
+                    Err(error) if source_unavailable(&error) => {
+                        report_unavailable_source(&runtime);
+                    }
                     Err(error) => eprintln!("Cannot retrieve network script: {error:#}"),
                 }
             });
+        }
+        "Network.loadingFailed" => {
+            let Some(session) = event.session_id else {
+                return;
+            };
+            let Some(request_id) = field(&event.params, "requestId") else {
+                return;
+            };
+            runtime
+                .network_scripts
+                .lock()
+                .await
+                .remove(&(session, request_id));
         }
         _ => {}
     }
@@ -285,7 +325,15 @@ async fn configure_target(
         }
     }
     client
-        .call("Network.enable", json!({}), Some(session))
+        .call(
+            "Network.enable",
+            json!({
+                "maxTotalBufferSize": 128 * 1024 * 1024,
+                "maxResourceBufferSize": runtime.max_script_bytes,
+                "enableDurableMessages": true
+            }),
+            Some(session),
+        )
         .await?;
     if matches!(mode, Mode::Dynamic) {
         client
@@ -441,6 +489,33 @@ fn ignored_url(url: &str) -> bool {
     ]
     .iter()
     .any(|prefix| url.starts_with(prefix))
+}
+
+fn source_unavailable(error: &anyhow::Error) -> bool {
+    has_error_code(error, -32000) || has_error_code(error, -32001)
+}
+
+fn report_unavailable_source(runtime: &Runtime) {
+    if !runtime
+        .unavailable_source_reported
+        .swap(true, Ordering::Relaxed)
+    {
+        eprintln!("Some script sources became unavailable during navigation; collection continues");
+    }
+}
+
+fn is_connection_transition(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::UnexpectedEof
+            )
+        })
+    })
 }
 
 fn decode_body(value: Value) -> Result<String> {
