@@ -10,12 +10,28 @@ use oxc_parser::{ParseOptions, Parser};
 use oxc_semantic::SemanticBuilder;
 use oxc_span::{SourceType, Span};
 
-use sinksight_library_hash::{check_script, free_db, load_db, CheckResult};
+use sinksight_library_hash::{check_script, load_db_handle, CheckResult, LoadedDb};
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch};
 use crate::detectors::detect_all;
 
 pub const MAX_SNIPPET: usize = 200;
+
+pub struct Analyzer {
+    library_db: Option<LoadedDb>,
+}
+
+impl Analyzer {
+    pub fn new(library_db: Option<&[u8]>) -> Result<Self, String> {
+        Ok(Self {
+            library_db: library_db.map(load_db_handle).transpose()?,
+        })
+    }
+
+    pub fn analyze(&self, source: &str) -> AnalyzeResult {
+        analyze_with_handle(source, self.library_db.as_ref().map(LoadedDb::handle))
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +161,11 @@ impl LineIndex {
 
 /// Analyze JavaScript source. Optional `library_db` is raw `.slhdb` bytes.
 pub fn analyze(source: &str, library_db: Option<&[u8]>) -> AnalyzeResult {
+    let analyzer = Analyzer::new(library_db).unwrap_or_else(|_| Analyzer { library_db: None });
+    analyzer.analyze(source)
+}
+
+fn analyze_with_handle(source: &str, library_db: Option<u32>) -> AnalyzeResult {
     let allocator = Allocator::default();
     let source_type = SourceType::unambiguous();
     let options = ParseOptions {
@@ -177,12 +198,7 @@ pub fn analyze(source: &str, library_db: Option<&[u8]>) -> AnalyzeResult {
         .map(|m| raw_match_to_finding(source, &line_index, m))
         .collect();
 
-    let library = library_db.and_then(|data| {
-        let handle = load_db(data).ok()?;
-        let result = check_script(handle, source);
-        free_db(handle);
-        Some(LibraryCheck::from(&result))
-    });
+    let library = library_db.map(|handle| LibraryCheck::from(&check_script(handle, source)));
 
     if library
         .as_ref()

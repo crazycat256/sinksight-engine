@@ -10,9 +10,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
-use crate::analyze;
 use crate::cdp::{Client, Event};
 use crate::store::{CapturedScript, Store};
+use crate::Analyzer;
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum Mode {
@@ -41,31 +41,39 @@ struct Runtime {
     store: Mutex<Store>,
     targets: RwLock<HashMap<String, Target>>,
     network_scripts: Mutex<HashMap<(String, String), (String, String)>>,
-    library_db: Option<Vec<u8>>,
+    analyzer: Analyzer,
     max_script_bytes: usize,
     semaphore: Semaphore,
 }
 
 pub async fn run(config: Config) -> Result<()> {
+    let analyzer = Analyzer::new(config.library_db.as_deref())
+        .map_err(anyhow::Error::msg)
+        .context("invalid library database")?;
     let runtime = Arc::new(Runtime {
         store: Mutex::new(Store::open(&config.output)?),
         targets: RwLock::new(HashMap::new()),
         network_scripts: Mutex::new(HashMap::new()),
-        library_db: config.library_db,
+        analyzer,
         max_script_bytes: config.max_script_bytes,
         semaphore: Semaphore::new(config.analysis_concurrency.max(1)),
     });
     runtime.store.lock().await.export()?;
 
+    let mut waiting_for_chromium = false;
     loop {
         let endpoint = match endpoint_from_file(&config.devtools_active_port).await {
             Ok(endpoint) => endpoint,
             Err(error) => {
-                eprintln!("Waiting for Chromium: {error:#}");
+                if !waiting_for_chromium {
+                    eprintln!("Waiting for Chromium: {error:#}");
+                    waiting_for_chromium = true;
+                }
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
         };
+        waiting_for_chromium = false;
         if let Err(error) = collect_connection(&endpoint, config.mode, runtime.clone()).await {
             eprintln!("CDP collection failed: {error:#}");
         }
@@ -138,6 +146,17 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
         "Target.detachedFromTarget" => {
             if let Some(session) = field(&event.params, "sessionId") {
                 runtime.targets.write().await.remove(&session);
+            }
+        }
+        "Page.frameNavigated" => {
+            let Some(session) = event.session_id else {
+                return;
+            };
+            let frame = &event.params["frame"];
+            if frame.get("parentId").is_none() {
+                if let Some(url) = field(frame, "url") {
+                    set_target_url(&runtime, &session, url).await;
+                }
             }
         }
         "Debugger.scriptParsed" if matches!(mode, Mode::Dynamic) => {
@@ -253,6 +272,18 @@ async fn configure_target(
             Some(session),
         )
         .await;
+    if matches!(target.target_type.as_str(), "page" | "iframe") {
+        client.call("Page.enable", json!({}), Some(session)).await?;
+        let frame_tree = client
+            .call("Page.getFrameTree", json!({}), Some(session))
+            .await?;
+        if let Some(url) = frame_tree
+            .pointer("/frameTree/frame/url")
+            .and_then(Value::as_str)
+        {
+            set_target_url(&runtime, session, url.to_owned()).await;
+        }
+    }
     client
         .call("Network.enable", json!({}), Some(session))
         .await?;
@@ -362,15 +393,22 @@ async fn page_url(runtime: &Runtime, session: &str) -> String {
     fallback
 }
 
+async fn set_target_url(runtime: &Runtime, session: &str, url: String) {
+    if let Some(target) = runtime.targets.write().await.get_mut(session) {
+        target.url = url;
+    }
+}
+
 async fn process(runtime: Arc<Runtime>, source: String, script_url: String, page_url: String) {
-    if source.trim().is_empty() || source.len() > runtime.max_script_bytes {
+    if ignored_url(&page_url) || source.trim().is_empty() || source.len() > runtime.max_script_bytes
+    {
         return;
     }
     let Ok(_permit) = runtime.semaphore.acquire().await else {
         return;
     };
     let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
-    let result = analyze(&source, runtime.library_db.as_deref());
+    let result = tokio::task::block_in_place(|| runtime.analyzer.analyze(&source));
     let mut store = runtime.store.lock().await;
     match store.save(CapturedScript {
         hash: &hash,
@@ -394,9 +432,15 @@ fn field(value: &Value, key: &str) -> Option<String> {
 }
 
 fn ignored_url(url: &str) -> bool {
-    ["chrome:", "devtools:", "chrome-extension:", "extensions::"]
-        .iter()
-        .any(|prefix| url.starts_with(prefix))
+    [
+        "chrome:",
+        "chrome-untrusted:",
+        "devtools:",
+        "chrome-extension:",
+        "extensions::",
+    ]
+    .iter()
+    .any(|prefix| url.starts_with(prefix))
 }
 
 fn decode_body(value: Value) -> Result<String> {

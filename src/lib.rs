@@ -9,6 +9,6 @@ pub mod inference;
 pub mod store;
 pub mod utils;
 
-pub use analyze::{analyze, AnalyzeResult, Finding, FindingCategory, LibraryCheck};
+pub use analyze::{analyze, AnalyzeResult, Analyzer, Finding, FindingCategory, LibraryCheck};
 pub use ctx::{AnalysisCtx, Category, RawMatch};
 pub use detectors::detect_all;
