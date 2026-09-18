@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/inference/typeInference.ts`.
-
 use std::collections::HashSet;
 
 use oxc_ast::ast::*;
@@ -141,7 +139,7 @@ fn infer_type_inner<'a>(
             } else if prop_name == "document" {
                 return InferredType::DOCUMENT;
             } else {
-                // Fresh visited-set: mirrors the TS implementation using a
+                // A fresh visited set prevents an unrelated inference path
                 // fresh Set for the owner-type lookup so it doesn't share
                 // cycle-detection state with the outer identifier.
                 let owner_type = infer_type_inner(
@@ -334,7 +332,7 @@ fn infer_type_from_property_usages(
         let ref_node_id = reference.node_id();
         let ref_span = nodes.kind(ref_node_id).span();
         let parent_id = nodes.parent_id(ref_node_id);
-        // Mirrors the TS implementation exactly: only plain, non-computed
+        // Only plain, non-computed
         // `name.property` accesses count (computed accesses like `name[x]`
         // are skipped, since `x` isn't necessarily a static property name).
         let prop_name = match nodes.kind(parent_id) {

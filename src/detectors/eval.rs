@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/impl/eval.ts`.
-
 use oxc_ast::ast::{CallExpression, Expression};
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};

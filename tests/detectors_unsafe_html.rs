@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/test/detectors/unsafeHtml.test.ts`.
-
 mod common;
 use common::count_detector;
 
@@ -146,16 +144,9 @@ fn ignores_multiple_assignments_on_a_single_line_with_final_static_value() {
     assert_eq!(count_detector(code, D), 0);
 }
 
-// The TS engine performs a control-flow-sensitive *backward* scan
-// (`isVariableSafeBackwards` in `inference/safety.ts`) that narrows a
-// variable's value to its nearest preceding assignment before falling back
-// to "every possible assignment must be safe". The Rust port intentionally
-// omits that backward walk (see the module docs on
-// `sinksight_engine::inference::safety`, which explain there is no cheap
-// oxc equivalent of Babel's sibling-statement traversal) and always uses
-// the conservative "all assignments, including the initializer, must be
-// safe" fallback. That makes this one case — reassigned-to-unsafe-then-
-// reassigned-back-to-safe — a known, documented false positive.
+// Backward flow narrowing is not implemented. The conservative analysis
+// therefore considers the overwritten unsafe initializer and reports this
+// reassigned-to-safe case as a known false positive.
 #[test]
 #[ignore = "requires backward control-flow narrowing not implemented in the Rust engine (see inference::safety module docs)"]
 fn ignores_reassigned_variable_that_is_later_assigned_a_safe_value() {

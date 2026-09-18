@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/impl/javascriptLinks.ts`.
-
 use std::collections::HashSet;
 
 use oxc_ast::ast::*;
@@ -242,7 +240,7 @@ fn is_self_link_assignment(left: &AssignmentTarget, right: &Expression) -> bool 
     left_prop == right_prop && expr_equivalent(left_obj, right_member.object())
 }
 
-/// Coarse approximation of Babel's `t.isNodesEquivalent` for the two shapes
+/// Coarse node-equivalence check for the two shapes
 /// this detector cares about: plain identifiers and member-expression
 /// chains built from identifiers / `this`.
 fn expr_equivalent(a: &Expression, b: &Expression) -> bool {

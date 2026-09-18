@@ -1,4 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/impl/windowName.ts`.
 //!
 //! Detects reads of `window.name`, which is attacker-controlled across
 //! navigations: a malicious page can set `window.name` before navigating

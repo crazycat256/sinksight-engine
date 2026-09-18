@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/test/inference/elements.test.ts`.
-
 mod common;
 use common::with_last_expr;
 use sinksight_engine::inference::{infer_element_type, is_dangerous_attribute};

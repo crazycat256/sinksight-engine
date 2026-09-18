@@ -1,6 +1,4 @@
-//! Shared helpers for the integration test suite, mirroring the role of
-//! `test/detectors/testUtils.ts` (`countMatches`) and `test/inference/helpers.ts`
-//! (`parseExpression`) in the upstream TypeScript test suite.
+//! Shared helpers for the integration test suite.
 
 #![allow(dead_code)]
 
@@ -52,7 +50,7 @@ pub fn with_ctx<R>(source: &str, f: impl FnOnce(&AnalysisCtx) -> R) -> R {
 }
 
 /// Runs `detect_all` and returns the sorted list of detector names that
-/// fired. Mirrors the `run` helper in `detectors::tests`.
+/// fired.
 pub fn detector_names(source: &str) -> Vec<&'static str> {
     with_ctx(source, |ctx| {
         let mut names: Vec<&'static str> =
@@ -62,10 +60,7 @@ pub fn detector_names(source: &str) -> Vec<&'static str> {
     })
 }
 
-/// Counts matches produced by a single named detector. Mirrors the TS
-/// `countMatches(code, someVisitor)` helper, but keyed by detector name
-/// since the Rust engine runs every detector in a single `detect_all` pass
-/// rather than exposing one visitor factory per detector.
+/// Counts matches produced by a single named detector.
 pub fn count_detector(source: &str, detector: &str) -> usize {
     with_ctx(source, |ctx| {
         detect_all(ctx)
@@ -76,8 +71,7 @@ pub fn count_detector(source: &str, detector: &str) -> usize {
 }
 
 /// Returns the [`Category`] of the first match produced by `detector`, if
-/// any. Mirrors `results.find(r => r.detectorName === name)?.category` in
-/// `complex_cases.test.ts`.
+/// any.
 pub fn category_for(source: &str, detector: &str) -> Option<Category> {
     with_ctx(source, |ctx| {
         detect_all(ctx)
@@ -87,17 +81,14 @@ pub fn category_for(source: &str, detector: &str) -> Option<Category> {
     })
 }
 
-/// Total number of findings across every detector. Mirrors
-/// `results.reduce((acc, r) => acc + r.matches.length, 0)` in
-/// `complex_cases.test.ts`.
+/// Total number of findings across every detector.
 pub fn total_matches(source: &str) -> usize {
     with_ctx(source, |ctx| detect_all(ctx).len())
 }
 
 /// Finds the last top-level statement (which must be an `ExpressionStatement`)
 /// and runs `f` with the analysis ctx, that statement's expression, and the
-/// scope active at that point. Mirrors the TS `parseExpression` helper from
-/// `test/inference/helpers.ts`.
+/// scope active at that point.
 pub fn with_last_expr<R>(
     source: &str,
     f: impl FnOnce(&AnalysisCtx, &Expression, ScopeId) -> R,
@@ -131,14 +122,11 @@ fn scope_id_for_expression_statement(ctx: &AnalysisCtx, span: oxc_span::Span) ->
 /// `f` the analysis ctx, the enclosing expression that reference is part of,
 /// and the scope active at that point.
 ///
-/// This mirrors the ad-hoc `Identifier`-visitor helpers in
-/// `test/inference/iife.test.ts` (`getTypeInside`/`getSafetyInside`), which
-/// need to filter out parameter *declarations* from Babel's unified
-/// `Identifier` node type. oxc already separates declarations
+/// Oxc separates declarations
 /// (`BindingIdentifier`) from usages (`IdentifierReference`) into distinct
 /// node kinds, so no such filtering is needed here.
 ///
-/// Only the small set of parent shapes exercised by the ported tests
+/// Only the small set of parent shapes exercised by these tests
 /// (bare `x;` expression statements and `var y = x;` declarators) are
 /// supported; anything else panics with a clear message.
 pub fn with_identifier_usage<R>(

@@ -1,4 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/inference/methodRegistry.ts`.
 //!
 //! NOTE: another agent may be working on a fuller/authoritative version of
 //! this registry in parallel. This implementation exists so that

@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/impl/functionConstructor.ts`.
-
 use oxc_ast::ast::{Argument, CallExpression, Expression, NewExpression};
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};

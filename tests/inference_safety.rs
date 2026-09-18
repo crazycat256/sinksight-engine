@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/test/inference/safety.test.ts`.
-
 mod common;
 use common::with_last_expr;
 use sinksight_engine::inference::is_safe_expression;
@@ -609,20 +607,9 @@ fn unsafe_arrow_function_parameter_is_considered_unsafe() {
     assert_unsafe(code);
 }
 
-// if-else backwards traversal optimizations
-//
-// The TS engine performs a control-flow-sensitive *backward* scan
-// (`isVariableSafeBackwards` in `inference/safety.ts`) over preceding
-// sibling statements to narrow a variable's value before falling back to
-// "every possible assignment must be safe". The Rust port intentionally
-// omits that backward walk (see the module docs on
-// `sinksight_engine::inference::safety`) and always uses the conservative
-// "all assignments, including the initializer, must be safe" fallback.
-// That fallback happens to reach the same verdict as the TS narrowing for
-// most of these cases (an actually-unsafe branch is still caught), except
-// for the two marked `#[ignore]` below, where TS proves safety by using
-// only the *reachable* branch(es) while the Rust fallback also considers
-// the (here, always-overwritten) unsafe initializer.
+// The conservative analysis considers every assignment, including the
+// initializer. It cannot yet narrow these cases to reachable branches, so
+// the safety-only cases below remain ignored.
 
 #[test]
 #[ignore = "requires backward control-flow narrowing not implemented in the Rust engine (see inference::safety module docs)"]

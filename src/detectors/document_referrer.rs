@@ -1,4 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/impl/documentReferrer.ts`.
 //!
 //! Detects reads of `document.referrer`, which is attacker-controlled: a
 //! malicious page can create a link or redirect to the target, making

@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/test/detectors/postMessage.test.ts`.
-
 mod common;
 use common::count_detector;
 

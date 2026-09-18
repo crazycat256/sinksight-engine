@@ -163,9 +163,8 @@ mod tests {
         // A template literal is always string-typed, regardless of its
         // interpolations, so this exercises the "string but not provably
         // safe" branch of the detector (a bare `location.hash` MemberExpression
-        // has no statically-known type in the method registry, so — matching
-        // the upstream TS implementation exactly — it is *not* flagged on
-        // its own).
+        // has no statically known type in the method registry, so it is not
+        // flagged on its own).
         let names = run(r#"setTimeout(`${location.hash}`, 100);"#);
         assert_eq!(names, vec!["unsafeTimers"]);
     }
@@ -231,8 +230,8 @@ mod tests {
     #[test]
     fn does_not_flag_location_assignment_from_location_search() {
         // `location.search` can never itself resolve to a `javascript:` URI
-        // (it's a query string, always prefixed by `?`), so — matching the
-        // upstream TS implementation — this is intentionally not flagged.
+        // (it is a query string, always prefixed by `?`), so this is
+        // intentionally not flagged.
         let names = run(r#"location.href = location.search;"#);
         assert!(names.is_empty(), "expected no matches, got {names:?}");
     }

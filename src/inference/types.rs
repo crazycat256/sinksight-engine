@@ -1,9 +1,7 @@
-//! Port of `packages/vscode-ext/src/detectors/inference/types.ts`.
-
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-/// All types that the inference engine can identify. Unlike the TS version
+/// All types that the inference engine can identify. Unlike JavaScript
 /// (`InferredType = "string" | ... | (string & {})`), Rust has no
 /// "open string enum" idiom, so this is a thin wrapper around `&'static str`
 /// for well-known types plus an owned `String` fallback for constructor

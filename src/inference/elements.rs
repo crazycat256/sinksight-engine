@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/inference/elements.ts`.
-
 use std::collections::HashSet;
 use std::sync::LazyLock;
 

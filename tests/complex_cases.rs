@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/test/complex_cases.test.ts`.
-
 mod common;
 use common::{category_for, count_detector, total_matches};
 use sinksight_engine::ctx::Category;
@@ -384,11 +382,9 @@ fn detects_eval_hidden_via_alias() {
     assert_eq!(count_detector(code, "eval"), 1);
 }
 
-// The TS suite skips this one too (`it.skip`): detecting `eval` reached via
-// `window[computedPropertyName]` requires tracking string concatenation
-// through a computed member expression key, which neither engine implements.
+// Computed member keys built through string concatenation are not implemented.
 #[test]
-#[ignore = "matches upstream `it.skip` — computed member access via concatenated property name is not implemented"]
+#[ignore = "computed member access via concatenated property name is not implemented"]
 fn detects_eval_hidden_via_member_syntax_with_concatenation() {
     let code = r#"
         const prop = 'ev' + 'al';
@@ -406,11 +402,10 @@ fn detects_settimeout_hidden_via_alias() {
     assert_eq!(count_detector(code, "unsafeTimers"), 1);
 }
 
-// Matches upstream `it.skip` — same computed-property-name limitation as
-// the eval alias case above, applied to `el[p] = userInput` where
+// Same computed-property-name limitation as the eval alias case above, applied to `el[p] = userInput` where
 // `p = 'inner' + 'HTML'`.
 #[test]
-#[ignore = "matches upstream `it.skip` — computed member access via concatenated property name is not implemented"]
+#[ignore = "computed member access via concatenated property name is not implemented"]
 fn detects_inner_html_with_concatenated_property_name() {
     let code = r#"
         const el = document.createElement("div");
@@ -420,10 +415,10 @@ fn detects_inner_html_with_concatenated_property_name() {
     assert_eq!(count_detector(code, "unsafeHtml"), 1);
 }
 
-// Matches upstream `it.skip` — detecting `document.write` reached via
-// `Function.prototype.call`/`apply` is not implemented in either engine.
+// Detecting `document.write` reached via `Function.prototype.call`/`apply`
+// is not implemented.
 #[test]
-#[ignore = "matches upstream `it.skip` — document.write via call()/apply() is not implemented"]
+#[ignore = "document.write via call()/apply() is not implemented"]
 fn detects_document_write_via_function_apply_call() {
     let code = r#"
         const w = document.write;

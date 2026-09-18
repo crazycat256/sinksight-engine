@@ -1,19 +1,10 @@
-//! Port of `packages/vscode-ext/src/detectors/inference/safety.ts`.
+//! Conservative safety inference for expressions and assignments.
 //!
-//! Simplification vs. the TS original: `allAssignmentsSafe` in TS first
-//! tries a control-flow-sensitive backward scan (`isVariableSafeBackwards`)
-//! over sibling statements/branches to narrow down the *specific* value a
-//! variable holds at the use site, only falling back to "every possible
-//! assignment must be safe" when that narrowing is inconclusive. Porting
-//! that backward walk requires Babel-style "get previous sibling statement"
-//! traversal, which has no cheap oxc equivalent (`AstNodes` has parent
-//! pointers but no sibling index). We skip the narrowing step and always
-//! use the "all assignments must be safe" fallback; this can never call an
-//! actually-unsafe expression "safe" (the narrowing only ever *shortcuts*
-//! the same fallback with a tighter, but consistent, answer), so it stays
-//! sound at the cost of being slightly more conservative (more
-//! false-"unsafe" verdicts) than the TS version in control-flow-narrowable
-//! cases.
+//! The analysis does not perform control-flow-sensitive backward narrowing
+//! over sibling statements because oxc's `AstNodes` has parent pointers but
+//! no sibling index. It instead requires every possible assignment to be
+//! safe. This cannot classify an unsafe expression as safe, but it can
+//! produce false positives when a later assignment dominates the use site.
 
 use std::collections::HashSet;
 
@@ -168,8 +159,8 @@ fn is_literal(expr: &Expression) -> bool {
 /// can ever hold is safe: the initializer (if any) and every subsequent
 /// plain assignment (`a = expr`). Returns `false` when the binding cannot
 /// be found, is a parameter with no resolvable call-site argument, or any
-/// value is not provably safe. Port of `allAssignmentsSafe` (see module
-/// docs for the one intentional deviation: no backward flow narrowing).
+/// value is not provably safe. See the module documentation regarding the
+/// deliberate absence of backward flow narrowing.
 fn all_assignments_safe<'a>(
     ctx: &AnalysisCtx<'a>,
     name: &str,
@@ -278,8 +269,7 @@ fn is_call_safe<'a>(
 }
 
 /// Very naive `return` statement collection for basic IIFE bodies: walks
-/// nested blocks and `if` branches (matching the TS implementation's
-/// `checkReturn`), treating an IIFE with no `return` at all as implicitly
+/// nested blocks and `if` branches, treating an IIFE with no `return` as implicitly
 /// returning `undefined` (safe).
 fn is_iife_body_safe<'a>(
     ctx: &AnalysisCtx<'a>,
@@ -386,8 +376,7 @@ fn is_method_call_safe<'a>(
         }
     }
 
-    // Instance methods: infer the receiver type (fresh visited set, mirrors
-    // `infer_type`'s own top-level default), then look up the method.
+    // Infer the receiver independently before looking up the instance method.
     let owner_type = infer_type(ctx, obj, scope_id);
     if !owner_type.is_unknown() {
         if let Some(desc) = get_instance_method(owner_type.as_str(), prop) {

@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/test/inference/typeInference.test.ts`.
-
 mod common;
 use common::with_last_expr;
 use sinksight_engine::inference::infer_type;

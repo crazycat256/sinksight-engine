@@ -1,9 +1,6 @@
-//! Port of `packages/vscode-ext/test/real_world.test.ts`.
-//!
 //! Downloads real-world minified libraries from a CDN, verifies their
 //! integrity via SRI, and asserts the exact set of (detector, line, column)
-//! findings `analyze` produces, mirroring the upstream Babel-based
-//! `detectAll` results recorded in the TS test.
+//! findings `analyze` produces.
 //!
 //! Downloaded content is cached under `tests/fixtures/.cache/` (verified
 //! against the pinned SRI hash on every read) so repeat runs and
@@ -216,8 +213,7 @@ fn verify_sri(content: &str, sri: &str) -> bool {
     }
 }
 
-/// Mirrors the TS `getContent`: serve from a SRI-verified cache entry if
-/// present, otherwise download, verify, and populate the cache.
+/// Uses a verified cache entry when present, otherwise downloads and verifies it.
 fn get_content(target: &Target) -> String {
     let cache_dir = cache_dir();
     let cached_path = cache_dir.join(target.name);

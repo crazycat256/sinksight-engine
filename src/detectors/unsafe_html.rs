@@ -1,4 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/impl/unsafeHtml.ts`.
 //!
 //! Detects assignment to `.innerHTML` / `.outerHTML` / `.srcdoc` with a
 //! value that isn't provably safe from injection.

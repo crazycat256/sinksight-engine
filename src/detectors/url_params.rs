@@ -1,4 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/impl/urlParams.ts`.
 //!
 //! Detects URL-parsing constructs where the current page's URL is parsed,
 //! giving the attacker access to query-string / fragment data:

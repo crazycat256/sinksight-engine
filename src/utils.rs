@@ -1,4 +1,4 @@
-//! Identifier resolution and shared AST helpers (port of `detectors/utils.ts`).
+//! Identifier resolution and shared AST helpers.
 
 use std::collections::HashSet;
 
@@ -9,8 +9,7 @@ use oxc_span::{GetSpan, Span};
 
 use crate::ctx::{AnalysisCtx, ScopeId};
 
-/// Mirrors `KNOWN_GLOBALS` in `utils.ts`. Identifiers in this list are never
-/// treated as implicit-global candidates during resolution.
+/// Identifiers in this list are never treated as implicit-global candidates.
 pub const KNOWN_GLOBALS: &[&str] = &[
     "window",
     "document",
@@ -56,8 +55,7 @@ const MAX_RESOLVE_DEPTH: u32 = 30;
 // Simple structural helpers (no scope needed)
 // ---------------------------------------------------------------------------
 
-/// Port of `getStaticKeyName`. Works for both object literal property keys
-/// and (via [`is_property_named`]) member expression properties.
+/// Returns the static name of an object literal property key.
 pub fn get_static_key_name<'a>(computed: bool, key: &PropertyKey<'a>) -> Option<&'a str> {
     if !computed {
         if let PropertyKey::StaticIdentifier(id) = key {
@@ -70,7 +68,8 @@ pub fn get_static_key_name<'a>(computed: bool, key: &PropertyKey<'a>) -> Option<
     None
 }
 
-/// Port of `isPropertyNamed`. oxc's [`MemberExpression::static_property_name`]
+/// Checks whether a member has one of the supplied static property names.
+/// Oxc's [`MemberExpression::static_property_name`]
 /// already unifies the "static identifier" and "computed string literal"
 /// cases for us.
 pub fn is_property_named(member: &MemberExpression, targets: &[&str]) -> bool {
@@ -105,8 +104,8 @@ pub fn assignment_target_object<'a>(
     }
 }
 
-/// Port of `matchesCalleeNames`. `callee` covers `Identifier`, member
-/// expressions, and (unlike Babel, which has a separate `t.Super`) `super`,
+/// Checks identifier and member-expression callees against known names. `callee` covers `Identifier`, member
+/// expressions, and `super`,
 /// since oxc's `Expression` already has a `Super` variant.
 pub fn matches_callee_names(callee: &Expression, targets: &[&str]) -> bool {
     match callee {
@@ -117,11 +116,10 @@ pub fn matches_callee_names(callee: &Expression, targets: &[&str]) -> bool {
     }
 }
 
-/// Strips parentheses/TS type-wrapper nodes, mirroring `unwrapExpression`.
+/// Strips parentheses and TypeScript type-wrapper nodes.
 /// oxc is normally parsed with `preserve_parens: false` (see
 /// `sinksight_engine::parse`), so `ParenthesizedExpression` should not
-/// appear in practice, but we defensively unwrap it (and the TS assertion
-/// wrappers) anyway since detectors may run against ASTs parsed elsewhere.
+/// appear in practice, but detectors may receive ASTs parsed elsewhere.
 pub fn unwrap_expression<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
     let mut current = expr;
     loop {
@@ -137,7 +135,7 @@ pub fn unwrap_expression<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
     }
 }
 
-/// Port of `isDocumentObject`.
+/// Checks whether an expression denotes the global document object.
 pub fn is_document_object(expr: &Expression) -> bool {
     match expr {
         Expression::Identifier(ident) => ident.name == "document",
@@ -151,8 +149,8 @@ pub fn is_document_object(expr: &Expression) -> bool {
     }
 }
 
-/// Port of `isWindowLike`. `scope_id` is used to check that the name isn't
-/// shadowed by a local binding (`!scope?.getBinding(name)` in Babel).
+/// Checks whether an expression denotes an unshadowed window-like global. `scope_id` checks that the name is not
+/// shadowed by a local binding.
 pub fn is_window_like<'a>(ctx: &AnalysisCtx<'a>, expr: &Expression<'a>, scope_id: ScopeId) -> bool {
     match expr {
         Expression::Identifier(ident) => {
@@ -173,7 +171,7 @@ pub fn is_window_like<'a>(ctx: &AnalysisCtx<'a>, expr: &Expression<'a>, scope_id
 const LOCATION_PROPS: &[&str] = &["search", "hash", "href", "pathname"];
 const DOCUMENT_URL_PROPS: &[&str] = &["URL", "documentURI", "baseURI"];
 
-/// Port of `isGlobalLocation`.
+/// Checks whether an expression denotes the global location object.
 pub fn is_global_location<'a>(
     ctx: &AnalysisCtx<'a>,
     expr: &Expression<'a>,
@@ -194,7 +192,7 @@ pub fn is_global_location<'a>(
     }
 }
 
-/// Port of `isBrowserUrlSource`.
+/// Checks whether an expression reads from a browser-controlled URL source.
 pub fn is_browser_url_source<'a>(
     ctx: &AnalysisCtx<'a>,
     expr: &Expression<'a>,
@@ -227,7 +225,7 @@ pub fn is_browser_url_source<'a>(
     false
 }
 
-/// Port of `startsWithVariable`.
+/// Checks whether concatenation starts with a non-static value.
 pub fn starts_with_variable(expr: &Expression) -> bool {
     let unwrapped = unwrap_expression_ref(expr);
     match unwrapped {
@@ -261,7 +259,7 @@ fn unwrap_expression_ref<'b>(expr: &'b Expression<'b>) -> &'b Expression<'b> {
     }
 }
 
-/// Port of `hasSafeUrlPrefix`.
+/// Checks whether an expression has a statically safe URL prefix.
 pub fn has_safe_url_prefix<'a>(
     ctx: &AnalysisCtx<'a>,
     expr: &'a Expression<'a>,
@@ -314,7 +312,7 @@ fn get_leading_literal_text<'a>(
 // isStaticStringExpression
 // ---------------------------------------------------------------------------
 
-/// Port of `isStaticStringExpression`.
+/// Checks whether an expression resolves to a static string.
 pub fn is_static_string_expression<'a>(
     ctx: &AnalysisCtx<'a>,
     expr: &'a Expression<'a>,
@@ -385,8 +383,8 @@ fn is_static_string_expression_inner<'a>(
 // resolve_identifier - the core constant-folding engine
 // ---------------------------------------------------------------------------
 
-/// Result of resolving an IIFE parameter to its call-site argument. Mirrors
-/// Babel's `{ arg, scope } | { arg: null, scope: null } | null` union, but
+/// Result of resolving an IIFE parameter to its call-site argument. Uses
+/// A compact enum represents resolved, missing, and unresolved arguments.
 /// `None` (the outer `Option`) plays the role of the "not an IIFE param"
 /// `null`, while `arg: None` plays the role of the "missing argument"
 /// (`undefined`) case.
@@ -402,7 +400,7 @@ pub struct NamedParamResolution<'a> {
     pub scope_id: ScopeId,
 }
 
-/// Port of `resolveIdentifier`. See module docs for the general approach.
+/// Resolves an identifier to the expression that supplies its value.
 pub fn resolve_identifier<'a>(
     ctx: &AnalysisCtx<'a>,
     expr: &'a Expression<'a>,
@@ -566,7 +564,7 @@ fn resolve_identifier_inner<'a>(
 
 /// Coarse-grained "same AST node kind" comparison, used to decide whether
 /// multiple call-site arguments can be treated as representative of a single
-/// value for type-inference purposes (mirrors Babel's `arg.type` check).
+/// value for type-inference purposes.
 fn expr_kind_name(expr: &Expression) -> &'static str {
     match expr {
         Expression::StringLiteral(_) => "StringLiteral",
@@ -586,7 +584,6 @@ fn expr_kind_name(expr: &Expression) -> &'static str {
 }
 
 /// Resolves `expr` and, if it resolves to an object literal, returns it.
-/// Port of `resolveToObject`.
 pub fn resolve_to_object<'a>(
     ctx: &AnalysisCtx<'a>,
     expr: &'a Expression<'a>,
@@ -623,7 +620,7 @@ fn find_object_property_value<'a>(
     None
 }
 
-/// Port of `isSafeObjectExpression`: no spreads, no getters/setters (regular
+/// Checks that an object has no spreads or getters/setters (regular
 /// methods are fine since a function value can't itself become a string).
 fn is_safe_object_expression(obj: &ObjectExpression) -> bool {
     obj.properties.iter().all(|prop| match prop {
@@ -651,8 +648,7 @@ pub(crate) fn declarator_init<'a>(
 }
 
 /// Whether `symbol_id` is bound by a `VariableDeclarator` (`var`/`let`/
-/// `const x = ...`), regardless of whether it has an initializer. Mirrors
-/// the TS `binding.path.isVariableDeclarator()` check in `safety.ts`.
+/// `const x = ...`), regardless of whether it has an initializer.
 pub(crate) fn is_variable_declarator_binding(ctx: &AnalysisCtx, symbol_id: SymbolId) -> bool {
     let scoping = ctx.semantic.scoping();
     let nodes = ctx.semantic.nodes();
@@ -662,8 +658,7 @@ pub(crate) fn is_variable_declarator_binding(ctx: &AnalysisCtx, symbol_id: Symbo
     )
 }
 
-/// Whether `symbol_id` is bound by a `FormalParameter`. Mirrors the TS
-/// `binding.kind === "param"` check in `safety.ts`.
+/// Whether `symbol_id` is bound by a `FormalParameter`.
 pub(crate) fn is_parameter_binding(ctx: &AnalysisCtx, symbol_id: SymbolId) -> bool {
     let scoping = ctx.semantic.scoping();
     let nodes = ctx.semantic.nodes();
@@ -673,15 +668,15 @@ pub(crate) fn is_parameter_binding(ctx: &AnalysisCtx, symbol_id: SymbolId) -> bo
     )
 }
 
-/// Port of `getMutatedProperties`.
+/// Returns properties that may have been mutated through a binding.
 ///
 /// Returns `None` when mutation-safety cannot be established at all (the
 /// binding should be treated as fully unsafe to read through), or
 /// `Some(set)` of property names that are known to be mutated/escaped
 /// somewhere in the program (an empty set means "provably never mutated").
 ///
-/// Simplification vs. the TS original: property-chain depth tracking is
-/// preserved (`obj.a.b = x` invalidates everything, matching Babel), but the
+/// Property-chain depth tracking is conservative and
+/// preserved (`obj.a.b = x` invalidates everything), but the
 /// "lambda passed to an opaque call escapes the object" check only looks at
 /// the *direct* enclosing function of each reference, not the full ancestor
 /// chain of nested closures. This trades a small amount of precision for
@@ -716,7 +711,7 @@ fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<Hash
         }
 
         if depth == 0 {
-            // Port of the TS upfront check: every reference to a trackable
+            // Every reference to a trackable
             // binding must be the `object` of a `MemberExpression`, or the
             // whole binding is invalidated. This covers cases like `foo(obj)`
             // or `const b = obj` where the object itself escapes untracked,
@@ -857,7 +852,7 @@ fn member_property_name_for_object_span<'a>(
     }
 }
 
-/// Approximates Babel's "is this reference read inside a closure that is
+/// Determines whether a reference is read inside a closure that is
 /// itself passed to an opaque call" escape check, but only for the direct
 /// enclosing function (see [`get_mutated_properties`] doc comment).
 fn reference_escapes_into_opaque_call(
@@ -893,7 +888,7 @@ fn reference_escapes_into_opaque_call(
     false
 }
 
-/// Port of `hasOnlyTrivialSelfAssignments`.
+/// Checks whether a binding only has trivial self-assignments.
 fn has_only_trivial_self_assignments(ctx: &AnalysisCtx, symbol_id: SymbolId, name: &str) -> bool {
     let scoping = ctx.semantic.scoping();
     let nodes = ctx.semantic.nodes();
@@ -918,7 +913,7 @@ fn has_only_trivial_self_assignments(ctx: &AnalysisCtx, symbol_id: SymbolId, nam
     has_any
 }
 
-/// Port of `resolveIIFEParam`.
+/// Resolves an IIFE parameter to its call-site argument.
 pub(crate) fn resolve_iife_param<'a>(
     ctx: &AnalysisCtx<'a>,
     symbol_id: SymbolId,
@@ -975,7 +970,7 @@ pub(crate) fn resolve_iife_param<'a>(
     }
 }
 
-/// Port of `resolveNamedFunctionParam`.
+/// Resolves a named function parameter across its call sites.
 pub(crate) fn resolve_named_function_param<'a>(
     ctx: &AnalysisCtx<'a>,
     symbol_id: SymbolId,
@@ -1043,11 +1038,11 @@ pub(crate) fn resolve_named_function_param<'a>(
     })
 }
 
-/// Port of the implicit-global-assignment lookup inside `resolveIdentifier`.
+/// Resolves an implicit global from its assignment.
 ///
 /// Uses `Scoping::root_unresolved_references`, which already gives us
 /// exactly the set of identifier references that could not be resolved to
-/// any declared binding (i.e. Babel's `!binding` case) — no whole-program
+/// any declared binding. No whole-program
 /// re-scan required.
 fn resolve_implicit_global<'a>(ctx: &AnalysisCtx<'a>, name: &str) -> Option<&'a Expression<'a>> {
     let scoping = ctx.semantic.scoping();
@@ -1082,7 +1077,7 @@ fn resolve_implicit_global<'a>(ctx: &AnalysisCtx<'a>, name: &str) -> Option<&'a 
     found
 }
 
-/// Port of the `this.prop` resolution branch inside `resolveIdentifier`.
+/// Resolves a value assigned through `this.prop`.
 /// Scans every AST node for the first `this.prop = value` assignment that is
 /// a descendant of the node that created `scope_id`.
 fn resolve_this_property<'a>(

@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/test/inference/iife.test.ts`.
-
 mod common;
 use common::{with_identifier_usage, with_last_expr};
 use sinksight_engine::inference::{infer_type, is_safe_expression};
@@ -22,16 +20,14 @@ fn assert_unsafe(code: &str) {
     });
 }
 
-/// Port of the TS `getTypeInside` helper: finds the first *usage* of
-/// `var_name` and returns its inferred type.
+/// Finds the first usage of `var_name` and returns its inferred type.
 fn get_type_inside(code: &str, var_name: &str) -> String {
     with_identifier_usage(code, var_name, |ctx, expr, scope_id| {
         infer_type(ctx, expr, scope_id).to_string()
     })
 }
 
-/// Port of the TS `getSafetyInside` helper: finds the first *usage* of
-/// `var_name` and returns whether it's safe.
+/// Finds the first usage of `var_name` and returns whether it is safe.
 fn get_safety_inside(code: &str, var_name: &str) -> bool {
     with_identifier_usage(code, var_name, |ctx, expr, scope_id| {
         is_safe_expression(ctx, expr, scope_id)

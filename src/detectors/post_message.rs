@@ -1,4 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/impl/postMessage.ts`.
 //!
 //! Detects `postMessage` event listeners where the handler does NOT verify
 //! `event.origin` / `event.source`. An unchecked `message` listener is an
@@ -251,7 +250,7 @@ fn body_checks_origin(body: &HandlerBody, event_param: &str) -> bool {
     }
 }
 
-/// Mirrors the statement-shaped branches of the TS `nodeReferencesOrigin`
+/// Checks statement-shaped branches for origin validation.
 /// (the ones that only make sense for statements, not expressions).
 fn stmt_references_origin(stmt: &Statement, event_param: &str) -> bool {
     match stmt {
@@ -284,9 +283,9 @@ fn stmt_references_origin(stmt: &Statement, event_param: &str) -> bool {
     }
 }
 
-/// Mirrors `nodeReferencesOrigin` when called on an expression-shaped node:
+/// Checks expression-shaped nodes for origin validation:
 /// the ternary-test shortcut, then the generic `expressionReferencesOrigin`
-/// checks (which already subsume the TS "comparison operator" and
+/// checks (which already subsume comparison-operator and
 /// "call expression" shortcuts).
 fn expr_references_origin(expr: &Expression, event_param: &str) -> bool {
     if let Expression::ConditionalExpression(cond) = expr {
@@ -297,7 +296,7 @@ fn expr_references_origin(expr: &Expression, event_param: &str) -> bool {
     expression_references_origin(expr, event_param)
 }
 
-/// Port of `expressionReferencesOrigin`: checks if an expression is
+/// Checks whether an expression is
 /// `<eventParam>.origin` / `<eventParam>.source`, or contains such an
 /// access through a logical/binary/call/unary wrapper.
 fn expression_references_origin(expr: &Expression, event_param: &str) -> bool {

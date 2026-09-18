@@ -1,5 +1,3 @@
-//! Port of `packages/vscode-ext/src/detectors/impl/insertAdjacentHtml.ts`.
-
 use oxc_ast::ast::CallExpression;
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
