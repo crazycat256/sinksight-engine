@@ -540,7 +540,9 @@ impl<'a, 'v> Analyzer<'a, 'v> {
             Statement::ExpressionStatement(stmt) => {
                 self.exec_expr(&stmt.expression, fact, until_use)
             }
-            Statement::VariableDeclaration(decl) => self.exec_var_decl(decl, fact, until_use),
+            Statement::VariableDeclaration(decl) => {
+                self.exec_var_decl(decl, fact, until_use, Fact::Safe)
+            }
             Statement::FunctionDeclaration(_) => Outgoing::fallthrough(fact),
             Statement::ClassDeclaration(class) => self.exec_class(class, fact, until_use),
             Statement::IfStatement(if_stmt) => self.exec_if(if_stmt, fact, until_use),
@@ -605,7 +607,9 @@ impl<'a, 'v> Analyzer<'a, 'v> {
         until_use: bool,
     ) -> Outgoing {
         match decl {
-            Declaration::VariableDeclaration(v) => self.exec_var_decl(v, fact, until_use),
+            Declaration::VariableDeclaration(v) => {
+                self.exec_var_decl(v, fact, until_use, Fact::Safe)
+            }
             Declaration::FunctionDeclaration(_) => Outgoing::fallthrough(fact),
             Declaration::ClassDeclaration(c) => self.exec_class(c, fact, until_use),
             _ => Outgoing::fallthrough(fact),
@@ -649,11 +653,15 @@ impl<'a, 'v> Analyzer<'a, 'v> {
         Outgoing::stop(fact)
     }
 
+    /// `no_init_fact` is the value a declarator without an initializer binds.
+    /// That is `undefined` (safe) for a plain `var`/`let`, but for a
+    /// `for (const x of xs)` head it is whatever `xs` yields.
     fn exec_var_decl(
         &mut self,
         decl: &'a VariableDeclaration<'a>,
         mut fact: Fact,
         until_use: bool,
+        no_init_fact: Fact,
     ) -> Outgoing {
         for declarator in &decl.declarations {
             if let Some(init) = &declarator.init {
@@ -667,7 +675,7 @@ impl<'a, 'v> Analyzer<'a, 'v> {
                 if binding_is_simple(&declarator.id) {
                     fact = match &declarator.init {
                         Some(init) => self.fact_of(init, fact),
-                        None => Fact::Safe,
+                        None => no_init_fact,
                     };
                 } else {
                     fact = Fact::Unsafe;
@@ -840,7 +848,7 @@ impl<'a, 'v> Analyzer<'a, 'v> {
         let mut fact = fact;
         if let Some(init) = &stmt.init {
             let out = if let ForStatementInit::VariableDeclaration(decl) = init {
-                self.exec_var_decl(decl, fact, until_use)
+                self.exec_var_decl(decl, fact, until_use, Fact::Safe)
             } else if let Some(expr) = init.as_expression() {
                 self.exec_expr(expr, fact, until_use)
             } else {
@@ -925,8 +933,13 @@ impl<'a, 'v> Analyzer<'a, 'v> {
         }
         let after_right = right_out.next.unwrap_or(fact);
 
+        // Every iteration re-binds the loop variable to an element (for-of) or
+        // a property name (for-in) of `right`, so that is the value reaching
+        // uses in the body, not `undefined` and not the previous iteration's.
+        let element_fact = self.fact_of(right, after_right);
+
         let left_out = if let ForStatementLeft::VariableDeclaration(decl) = left {
-            self.exec_var_decl(decl, after_right, until_use)
+            self.exec_var_decl(decl, after_right, until_use, element_fact)
         } else if let Some(target) = left.as_assignment_target() {
             let mut out = self.exec_assignment_target(target, after_right, until_use);
             if out.found.is_none() {
@@ -934,7 +947,11 @@ impl<'a, 'v> Analyzer<'a, 'v> {
                     if assignment_target_writes_symbol(self.ctx, target, self.symbol_id)
                         && !is_const_variable_binding(self.ctx, self.symbol_id)
                     {
-                        *f = Fact::Unsafe;
+                        *f = if is_destructuring_target(target) {
+                            Fact::Unsafe
+                        } else {
+                            element_fact
+                        };
                     }
                 }
             }
