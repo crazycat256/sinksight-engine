@@ -12,7 +12,25 @@
 use oxc_ast::ast::{Argument, Expression, NewExpression};
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
-use crate::utils::is_browser_url_source;
+use crate::utils::{is_browser_url_source, is_static_string_expression, resolve_identifier};
+
+/// Whether the argument builds the parameters from scratch instead of parsing
+/// something that could be the page URL: a constant string, or the record form
+/// (`{ a: 1 }`) the constructor also accepts.
+fn is_self_contained_init<'a>(
+    ctx: &AnalysisCtx<'a>,
+    arg: &'a Argument<'a>,
+    scope_id: ScopeId,
+) -> bool {
+    let Some(expr) = arg.as_expression() else {
+        return false;
+    };
+    is_static_string_expression(ctx, expr, scope_id)
+        || matches!(
+            resolve_identifier(ctx, expr, scope_id),
+            Expression::ObjectExpression(_)
+        )
+}
 
 pub fn check<'a>(
     ctx: &AnalysisCtx<'a>,
@@ -35,7 +53,7 @@ pub fn check<'a>(
         // `new URLSearchParams()` with no arguments creates an empty
         // object — it doesn't read `location.search` by default.
         if let Some(arg) = new_expr.arguments.first() {
-            if !matches!(arg, Argument::StringLiteral(_)) {
+            if !is_self_contained_init(ctx, arg, scope_id) {
                 out.push(RawMatch {
                     detector: "urlParams",
                     category: Category::Input,

@@ -180,9 +180,9 @@ fn extract_type_property<'a>(
         }
         if let Expression::TemplateLiteral(lit) = val {
             if lit.quasis.len() == 1 {
-                if let Some(first) = lit.quasis.first() {
-                    return Some(first.value.raw.to_string());
-                }
+                // `cooked`, not `raw`: an escape such as `text/\u0068tml`
+                // denotes an executable MIME type just like `text/html` does.
+                return lit.quasis.first()?.value.cooked.map(|a| a.to_string());
             }
         }
         // Non-static `type` value — cannot determine.

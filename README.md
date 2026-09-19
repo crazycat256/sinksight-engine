@@ -33,7 +33,7 @@ sinksight analyze file.js --library-db /path/to/libraries.slhdb
 
 ## Output
 
-- `scripts/`: formatted JavaScript, grouped by observed host.
+- `scripts/`: captured JavaScript, stored verbatim, sharded by content hash.
 - `export/findings.csv`: compact list intended for quick agent inspection.
 - `export/findings.json`: the same findings as structured data.
 - `export/origins.json`: mapping from saved scripts to pages that loaded them.

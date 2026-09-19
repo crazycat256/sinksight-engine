@@ -304,10 +304,10 @@ fn param_initial_fact(
     }
     if let Some(named) = resolve_named_function_param(ctx, symbol_id) {
         let mut fact = Fact::Safe;
-        for arg in &named.args {
-            if let Some(e) = arg {
-                fact = fact.join(expr_fact(ctx, e, named.scope_id, visited));
-            }
+        // A call site that omits the argument passes `undefined`, which is safe
+        // and therefore cannot change the join.
+        for e in named.args.iter().flatten() {
+            fact = fact.join(expr_fact(ctx, e, named.scope_id, visited));
         }
         return fact;
     }
