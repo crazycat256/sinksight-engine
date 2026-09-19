@@ -1,17 +1,23 @@
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 
 use crate::{AnalyzeResult, Analyzer};
 
 const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_LIBRARY_BYTES: usize = 1024 * 1024 * 1024;
 const MAX_SOURCE_BYTES: usize = 64 * 1024 * 1024;
+
+/// A worker that never answers would otherwise hold its pool slot forever and,
+/// once every slot is stuck, stall collection silently.
+const ANALYSIS_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct Pool {
     executable: Box<Path>,
@@ -38,18 +44,32 @@ impl Pool {
             if slot.is_none() {
                 *slot = Some(Worker::start(&self.executable, self.library_db.as_deref()).await?);
             }
-            match slot.as_mut().unwrap().analyze(source).await {
-                Ok(result) => return Ok(result),
-                Err(error) => {
+            let outcome = timeout(ANALYSIS_TIMEOUT, slot.as_mut().unwrap().analyze(source)).await;
+            match outcome {
+                Ok(Ok(result)) => return Ok(result),
+                Ok(Err(error)) => {
                     last_error = Some(error);
-                    if let Some(mut worker) = slot.take() {
-                        let _ = worker.child.kill().await;
-                        let _ = worker.child.wait().await;
-                    }
+                    // The frame stream is desynchronized, so the worker is gone.
+                    kill(slot.take()).await;
+                }
+                Err(_) => {
+                    kill(slot.take()).await;
+                    // Retrying would just spend the same budget again.
+                    bail!(
+                        "analysis worker exceeded {} seconds",
+                        ANALYSIS_TIMEOUT.as_secs()
+                    );
                 }
             }
         }
         Err(last_error.unwrap())
+    }
+}
+
+async fn kill(worker: Option<Worker>) {
+    if let Some(mut worker) = worker {
+        let _ = worker.child.kill().await;
+        let _ = worker.child.wait().await;
     }
 }
 
