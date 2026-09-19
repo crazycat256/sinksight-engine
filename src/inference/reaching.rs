@@ -204,6 +204,7 @@ fn identifier_use_is_safe_after_guard<'a>(
         use_span: ident.span,
         scope_id,
         visited,
+        intermediate: None,
     };
     analyzer
         .exec_list(stmts, initial, true)
@@ -455,6 +456,9 @@ struct Analyzer<'a, 'v> {
     use_span: Span,
     scope_id: ScopeId,
     visited: &'v mut HashSet<String>,
+    /// Set while executing a `try` block: joins the fact after every statement
+    /// so the handler can see values that only exist part-way through it.
+    intermediate: Option<Fact>,
 }
 
 impl<'a, 'v> Analyzer<'a, 'v> {
@@ -506,7 +510,12 @@ impl<'a, 'v> Analyzer<'a, 'v> {
                 continues: out.continues,
             });
             match out.next {
-                Some(f) => fact = f,
+                Some(f) => {
+                    fact = f;
+                    if let Some(worst) = self.intermediate.as_mut() {
+                        *worst = worst.join(fact);
+                    }
+                }
                 None => return acc,
             }
         }
@@ -1200,16 +1209,22 @@ impl<'a, 'v> Analyzer<'a, 'v> {
         if until_use && self.contains_use(stmt.block.span) {
             return self.exec_list(&stmt.block.body, fact, true);
         }
+        // An exception can be raised between any two statements of the block,
+        // so the handler must see every value the symbol holds inside it, not
+        // only the one that reaches the end.
+        let outer = self.intermediate.replace(fact);
         let try_out = self.exec_list(&stmt.block.body, fact, false);
+        let thrown = self.intermediate.take().unwrap_or(fact);
+        self.intermediate = outer.map(|f| f.join(thrown));
 
         let mut tc = try_out;
         if let Some(handler) = &stmt.handler {
             if until_use && self.contains_use(handler.span) {
-                let catch_in = join_opt(tc.next, Some(fact)).unwrap_or(fact);
+                let catch_in = join_opt(tc.next, Some(thrown)).unwrap_or(thrown);
                 let catch_in = join_opt(Some(catch_in), tc.stops).unwrap_or(catch_in);
                 return self.exec_list(&handler.body.body, catch_in, true);
             }
-            let catch_in = join_opt(join_opt(tc.next, Some(fact)), tc.stops).unwrap_or(fact);
+            let catch_in = join_opt(join_opt(tc.next, Some(thrown)), tc.stops).unwrap_or(thrown);
             let catch_out = self.exec_list(&handler.body.body, catch_in, false);
             let mut merged = Outgoing::empty();
             merged.found = join_opt(tc.found, catch_out.found);
@@ -1227,7 +1242,12 @@ impl<'a, 'v> Analyzer<'a, 'v> {
             for (_, fact) in tc.breaks.iter().chain(tc.continues.iter()) {
                 fin_in = join_opt(fin_in, Some(*fact));
             }
-            let fin_in = fin_in.unwrap_or(fact);
+            // Without a handler the finalizer also runs on the exceptional
+            // path; with one, `thrown` already went through `catch_in`.
+            if stmt.handler.is_none() {
+                fin_in = join_opt(fin_in, Some(thrown));
+            }
+            let fin_in = fin_in.unwrap_or(thrown);
             if until_use && self.contains_use(fin.span) {
                 return self.exec_list(&fin.body, fin_in, true);
             }
