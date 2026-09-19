@@ -9,6 +9,7 @@ use base64::Engine;
 use clap::ValueEnum;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
 use crate::cdp::{has_error_code, Client, Event};
@@ -133,7 +134,17 @@ async fn collect_connection(
         .with_context(|| format!("cannot write {}", ready_file.display()))?;
 
     loop {
-        let event = events.recv().await?;
+        let event = match events.recv().await {
+            Ok(event) => event,
+            // A burst of events can outrun the dispatcher. Losing the tail of
+            // that burst costs a few scripts; tearing the session down would
+            // cost every target we have attached to.
+            Err(RecvError::Lagged(skipped)) => {
+                eprintln!("Dropped {skipped} CDP events while catching up; collection continues");
+                continue;
+            }
+            Err(error) => return Err(error).context("CDP event stream closed"),
+        };
         if event.method == "SinkSight.disconnected" {
             return Ok(());
         }
