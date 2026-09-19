@@ -86,14 +86,12 @@ pub static SAFE_TO_STRINGIFY_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::
         "null",
         "Date",
         // RegExp is NOT here: `new RegExp(userInput).toString()` echoes the
-        // attacker-controlled pattern.
-        "Error",
-        "URL",
-        // Array is not here: `String(new Array(userInput))` joins elements,
-        // so attacker-controlled entries become the stringified value.
+        // attacker-controlled pattern. Neither is Error (`"Error: " + message`),
+        // URL (an opaque path such as `data:,<img onerror=...>` survives
+        // serialization verbatim), Symbol (`String(Symbol(x))` is `"Symbol(x)"`)
+        // nor Array (`String(new Array(userInput))` joins the elements).
         "Map",
         "Set",
-        "Symbol",
     ])
 });
 

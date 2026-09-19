@@ -137,18 +137,19 @@ pub(crate) fn is_safe_expression_inner<'a>(
     }
 
     if let Expression::NewExpression(new_expr) = resolved {
-        if let Expression::Identifier(callee) = &new_expr.callee {
-            // RegExp and Array are not in SAFE_TO_STRINGIFY_TYPES because
-            // `new RegExp(userInput).toString()` and `String(new Array(userInput))`
-            // echo constructor arguments; they are safe only when every
-            // argument is itself provably safe.
-            if matches!(callee.name.as_str(), "RegExp" | "Array") {
+        if let Expression::Identifier(_) = &new_expr.callee {
+            let ctor_type = infer_type(ctx, resolved, scope_id);
+            // These types are not in SAFE_TO_STRINGIFY_TYPES because they echo
+            // their constructor arguments: `new RegExp(x).toString()`,
+            // `String(new Array(x))`, `"Error: " + x`, and `new URL("data:," + x)`
+            // (an opaque path is not percent-encoded). They are safe exactly
+            // when every argument is itself provably safe.
+            if matches!(ctor_type.as_str(), "RegExp" | "Array" | "Error" | "URL") {
                 return new_expr.arguments.iter().all(|a| match a.as_expression() {
                     Some(e) => is_safe_expression_inner(ctx, e, scope_id, visited),
                     None => true,
                 });
             }
-            let ctor_type = infer_type(ctx, resolved, scope_id);
             return is_safe_to_stringify(&ctor_type);
         }
     }

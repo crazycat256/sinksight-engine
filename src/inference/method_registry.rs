@@ -185,13 +185,13 @@ fn array_methods() -> MethodMap {
 }
 
 fn error_methods() -> MethodMap {
-    HashMap::from([("toString", always(InferredType::STRING))])
+    HashMap::from([("toString", preserves_obj(InferredType::STRING))])
 }
 
 fn url_methods() -> MethodMap {
     HashMap::from([
-        ("toString", always(InferredType::STRING)),
-        ("toJSON", always(InferredType::STRING)),
+        ("toString", preserves_obj(InferredType::STRING)),
+        ("toJSON", preserves_obj(InferredType::STRING)),
     ])
 }
 
@@ -470,7 +470,7 @@ pub static STATIC_METHODS: LazyLock<HashMap<&'static str, MethodMap>> = LazyLock
         (
             "Symbol",
             HashMap::from([
-                ("for", always(InferredType::SYMBOL)),
+                ("for", preserves_all(InferredType::SYMBOL)),
                 ("keyFor", unsafe_(InferredType::STRING)),
             ]),
         ),
