@@ -59,3 +59,32 @@ fn ignores_safe_expression_with_date() {
     "#;
     assert_eq!(count_detector(code, D), 0);
 }
+
+#[test]
+fn detects_eval_via_computed_concatenated_property() {
+    assert_eq!(count_detector("window['ev' + 'al'](code)", D), 1);
+}
+
+#[test]
+fn detects_eval_via_const_concatenated_property() {
+    let code = r#"
+        const prop = 'ev' + 'al';
+        window[prop](userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_eval_via_concatenated_const_variables() {
+    let code = r#"
+        const a = 'ev';
+        const b = 'al';
+        window[a + b](userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn ignores_computed_window_call_with_unknown_key() {
+    assert_eq!(count_detector("window[userInput](code)", D), 0);
+}

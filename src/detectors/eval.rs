@@ -2,7 +2,7 @@ use oxc_ast::ast::{CallExpression, Expression};
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
 use crate::inference::is_safe_expression;
-use crate::utils::{matches_callee_names, resolve_identifier};
+use crate::utils::{matches_callee_names, resolve_identifier, resolved_member_property_name};
 
 pub fn check<'a>(
     ctx: &AnalysisCtx<'a>,
@@ -30,12 +30,22 @@ fn is_eval_callee<'a>(
     callee: &'a Expression<'a>,
     scope_id: ScopeId,
 ) -> bool {
-    if matches_callee_names(callee, &["eval"]) {
+    if callee_property_is_eval(ctx, callee, scope_id) {
         return true;
     }
     let resolved = resolve_identifier(ctx, callee, scope_id);
-    if !std::ptr::eq(resolved, callee) {
-        return matches_callee_names(resolved, &["eval"]);
+    !std::ptr::eq(resolved, callee) && callee_property_is_eval(ctx, resolved, scope_id)
+}
+
+fn callee_property_is_eval<'a>(
+    ctx: &AnalysisCtx<'a>,
+    callee: &'a Expression<'a>,
+    scope_id: ScopeId,
+) -> bool {
+    if matches_callee_names(callee, &["eval"]) {
+        return true;
     }
-    false
+    callee.get_member_expr().is_some_and(|member| {
+        resolved_member_property_name(ctx, member, scope_id).as_deref() == Some("eval")
+    })
 }

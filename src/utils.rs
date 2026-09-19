@@ -91,6 +91,25 @@ pub fn assignment_target_property_name<'a>(target: &'a AssignmentTarget<'a>) -> 
     }
 }
 
+/// Like [`assignment_target_property_name`], but also folds `el[key]` when
+/// `key` is a constant string or a concatenation of constant strings.
+pub fn resolved_assignment_property_name<'a>(
+    ctx: &AnalysisCtx<'a>,
+    target: &'a AssignmentTarget<'a>,
+    scope_id: ScopeId,
+) -> Option<String> {
+    match target {
+        AssignmentTarget::StaticMemberExpression(m) => Some(m.property.name.to_string()),
+        AssignmentTarget::ComputedMemberExpression(m) => {
+            if let Some(name) = m.static_property_name() {
+                return Some(name.as_str().to_string());
+            }
+            fold_to_string_literal(ctx, &m.expression, scope_id, &mut HashSet::new())
+        }
+        _ => None,
+    }
+}
+
 /// Returns the object expression of an assignment target's member-like
 /// variants, or `None` for identifiers / destructuring patterns.
 pub fn assignment_target_object<'a>(
@@ -512,8 +531,8 @@ fn resolve_identifier_inner<'a>(
                             if let Some(prop_name) =
                                 resolved_member_property_name(ctx, member, scope_id)
                             {
-                                if !mutated.contains(prop_name) {
-                                    if let Some(value) = find_object_property_value(obj, prop_name)
+                                if !mutated.contains(&prop_name) {
+                                    if let Some(value) = find_object_property_value(obj, &prop_name)
                                     {
                                         return resolve_identifier_inner(
                                             ctx,
@@ -537,7 +556,7 @@ fn resolve_identifier_inner<'a>(
             resolve_identifier_inner(ctx, member.object(), scope_id, visited, depth + 1);
         if let Expression::ObjectExpression(obj) = resolved_obj {
             if let Some(prop_name) = resolved_member_property_name(ctx, member, scope_id) {
-                if let Some(value) = find_object_property_value(obj, prop_name) {
+                if let Some(value) = find_object_property_value(obj, &prop_name) {
                     return resolve_identifier_inner(ctx, value, scope_id, visited, depth + 1);
                 }
             }
@@ -550,7 +569,7 @@ fn resolve_identifier_inner<'a>(
                 let key = format!("this.{prop_name}");
                 if !visited.contains(&key) {
                     visited.insert(key);
-                    if let Some(value) = resolve_this_property(ctx, scope_id, prop_name) {
+                    if let Some(value) = resolve_this_property(ctx, scope_id, &prop_name) {
                         return resolve_identifier_inner(ctx, value, scope_id, visited, depth + 1);
                     }
                 }
@@ -803,7 +822,7 @@ fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<Hash
                 }
                 match prop_name_at_depth_1 {
                     Some(name) if name != "__proto__" => {
-                        mutated.insert(name.to_string());
+                        mutated.insert(name);
                     }
                     _ => return None,
                 }
@@ -816,7 +835,7 @@ fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<Hash
                 }
                 match prop_name_at_depth_1 {
                     Some(name) if name != "__proto__" => {
-                        mutated.insert(name.to_string());
+                        mutated.insert(name);
                     }
                     _ => return None,
                 }
@@ -830,7 +849,7 @@ fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<Hash
                 }
                 match prop_name_at_depth_1 {
                     Some(name) if name != "__proto__" => {
-                        mutated.insert(name.to_string());
+                        mutated.insert(name);
                     }
                     _ => return None,
                 }
@@ -851,7 +870,7 @@ fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<Hash
                     }
                     match prop_name_at_depth_1 {
                         Some(name) => {
-                            mutated.insert(name.to_string());
+                            mutated.insert(name);
                         }
                         None => return None,
                     }
@@ -868,7 +887,7 @@ fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<Hash
                     }
                     match prop_name_at_depth_1 {
                         Some(name) => {
-                            mutated.insert(name.to_string());
+                            mutated.insert(name);
                         }
                         None => return None,
                     }
@@ -903,15 +922,15 @@ fn simple_target_span(target: &SimpleAssignmentTarget) -> Option<Span> {
     }
 }
 
-/// Property name of a member access, including `obj[ident]` when `ident`
-/// folds to a string literal through constant bindings.
-fn resolved_member_property_name<'a>(
+/// Property name of a member access, including `obj[ident]` and `obj[a + b]`
+/// when the key folds to a constant string.
+pub(crate) fn resolved_member_property_name<'a>(
     ctx: &AnalysisCtx<'a>,
     member: &'a MemberExpression<'a>,
     scope_id: ScopeId,
-) -> Option<&'a str> {
+) -> Option<String> {
     if let Some(name) = member.static_property_name() {
-        return Some(name);
+        return Some(name.to_string());
     }
     let MemberExpression::ComputedMemberExpression(computed) = member else {
         return None;
@@ -919,7 +938,7 @@ fn resolved_member_property_name<'a>(
     fold_to_string_literal(ctx, &computed.expression, scope_id, &mut HashSet::new())
 }
 
-/// Folds `expr` to a string literal through identifier constants only.
+/// Folds `expr` to a constant string through identifier bindings and `+`.
 /// Does not walk member expressions, so mutation analysis cannot re-enter
 /// itself via a key like `obj[obj.a]`.
 fn fold_to_string_literal<'a>(
@@ -927,22 +946,38 @@ fn fold_to_string_literal<'a>(
     expr: &'a Expression<'a>,
     scope_id: ScopeId,
     visited: &mut HashSet<String>,
-) -> Option<&'a str> {
+) -> Option<String> {
     match unwrap_expression(expr) {
-        Expression::StringLiteral(lit) => Some(lit.value.as_str()),
+        Expression::StringLiteral(lit) => Some(lit.value.to_string()),
+        Expression::TemplateLiteral(lit) if lit.expressions.is_empty() => lit
+            .quasis
+            .first()?
+            .value
+            .cooked
+            .as_ref()
+            .map(|atom| atom.to_string()),
         Expression::Identifier(ident) => {
             let name = ident.name.as_str();
             if !visited.insert(name.to_string()) {
                 return None;
             }
-            let scoping = ctx.semantic.scoping();
-            let symbol_id = scoping.find_binding(scope_id, name)?;
-            let is_constant_ish = !scoping.symbol_is_mutated(symbol_id)
-                || has_only_trivial_self_assignments(ctx, symbol_id, name);
-            if !is_constant_ish {
-                return None;
-            }
-            fold_to_string_literal(ctx, declarator_init(ctx, symbol_id)?, scope_id, visited)
+            let result = (|| {
+                let scoping = ctx.semantic.scoping();
+                let symbol_id = scoping.find_binding(scope_id, name)?;
+                let is_constant_ish = !scoping.symbol_is_mutated(symbol_id)
+                    || has_only_trivial_self_assignments(ctx, symbol_id, name);
+                if !is_constant_ish {
+                    return None;
+                }
+                fold_to_string_literal(ctx, declarator_init(ctx, symbol_id)?, scope_id, visited)
+            })();
+            visited.remove(name);
+            result
+        }
+        Expression::BinaryExpression(bin) if bin.operator == BinaryOperator::Addition => {
+            let left = fold_to_string_literal(ctx, &bin.left, scope_id, visited)?;
+            let right = fold_to_string_literal(ctx, &bin.right, scope_id, visited)?;
+            Some(left + &right)
         }
         _ => None,
     }
@@ -950,18 +985,18 @@ fn fold_to_string_literal<'a>(
 
 /// Given the node id of the depth-1 member expression wrapping `ref_span`
 /// (i.e. `obj.prop` where `obj` is at `ref_span`), returns `prop`'s name
-/// if it is statically known or folds to a string literal.
+/// if it is statically known or folds to a constant string.
 fn member_property_name_for_object_span<'a>(
     ctx: &AnalysisCtx<'a>,
     nodes: &oxc_semantic::AstNodes<'a>,
     member_node_id: oxc_semantic::NodeId,
     _object_span: Span,
-) -> Option<&'a str> {
+) -> Option<String> {
     match nodes.kind(member_node_id) {
-        AstKind::StaticMemberExpression(m) => Some(m.property.name.as_str()),
+        AstKind::StaticMemberExpression(m) => Some(m.property.name.to_string()),
         AstKind::ComputedMemberExpression(m) => {
             if let Some(name) = m.static_property_name() {
-                return Some(name.as_str());
+                return Some(name.as_str().to_string());
             }
             let scope_id = nodes.get_node(member_node_id).scope_id();
             fold_to_string_literal(ctx, &m.expression, scope_id, &mut HashSet::new())

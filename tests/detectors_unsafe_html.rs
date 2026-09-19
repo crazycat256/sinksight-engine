@@ -248,3 +248,33 @@ fn ignores_srcdoc_assignment_on_div() {
     "#;
     assert_eq!(count_detector(code, D), 0);
 }
+
+#[test]
+fn detects_inner_html_via_concatenated_property_name() {
+    let code = r#"
+        const el = document.createElement("div");
+        el['inner' + 'HTML'] = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_inner_html_via_const_concatenated_property() {
+    let code = r#"
+        const el = document.createElement("div");
+        const p = 'inner' + 'HTML';
+        el[p] = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_inner_html_via_concatenated_const_variables() {
+    let code = r#"
+        const el = document.createElement("div");
+        const a = 'inner';
+        const b = 'HTML';
+        el[a + b] = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}

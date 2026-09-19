@@ -382,9 +382,7 @@ fn detects_eval_hidden_via_alias() {
     assert_eq!(count_detector(code, "eval"), 1);
 }
 
-// Computed member keys built through string concatenation are not implemented.
 #[test]
-#[ignore = "computed member access via concatenated property name is not implemented"]
 fn detects_eval_hidden_via_member_syntax_with_concatenation() {
     let code = r#"
         const prop = 'ev' + 'al';
@@ -402,10 +400,7 @@ fn detects_settimeout_hidden_via_alias() {
     assert_eq!(count_detector(code, "unsafeTimers"), 1);
 }
 
-// Same computed-property-name limitation as the eval alias case above, applied to `el[p] = userInput` where
-// `p = 'inner' + 'HTML'`.
 #[test]
-#[ignore = "computed member access via concatenated property name is not implemented"]
 fn detects_inner_html_with_concatenated_property_name() {
     let code = r#"
         const el = document.createElement("div");
@@ -415,10 +410,7 @@ fn detects_inner_html_with_concatenated_property_name() {
     assert_eq!(count_detector(code, "unsafeHtml"), 1);
 }
 
-// Detecting `document.write` reached via `Function.prototype.call`/`apply`
-// is not implemented.
 #[test]
-#[ignore = "document.write via call()/apply() is not implemented"]
 fn detects_document_write_via_function_apply_call() {
     let code = r#"
         const w = document.write;

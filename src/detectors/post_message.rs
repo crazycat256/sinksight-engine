@@ -11,7 +11,7 @@ use oxc_semantic::SymbolId;
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
 use crate::inference::infer_type;
 use crate::utils::{
-    assignment_target_object, assignment_target_property_name, declarator_init, is_property_named,
+    assignment_target_object, declarator_init, is_property_named, resolved_assignment_property_name,
 };
 
 pub fn check_call<'a>(
@@ -75,7 +75,7 @@ pub fn check_assignment<'a>(
     scope_id: ScopeId,
     out: &mut Vec<RawMatch>,
 ) {
-    if let Some(prop_name) = assignment_target_property_name(&expr.left) {
+    if let Some(prop_name) = resolved_assignment_property_name(ctx, &expr.left, scope_id) {
         if prop_name != "onmessage" {
             return;
         }

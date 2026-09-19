@@ -5,9 +5,9 @@ use oxc_ast::ast::*;
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
 use crate::inference::{attribute_sink_kind, infer_element_type, infer_type, AttributeSinkKind};
 use crate::utils::{
-    assignment_target_object, assignment_target_property_name, has_safe_url_prefix,
-    is_browser_url_source, is_property_named, is_static_string_expression, matches_callee_names,
-    resolve_identifier,
+    assignment_target_object, has_safe_url_prefix, is_browser_url_source, is_property_named,
+    is_static_string_expression, matches_callee_names, resolve_identifier,
+    resolved_assignment_property_name,
 };
 
 use super::{is_self_property_assignment, set_attribute_write};
@@ -34,14 +34,14 @@ pub fn check_assignment<'a>(
         return;
     }
 
-    let Some(prop_name) = assignment_target_property_name(&expr.left) else {
+    let Some(prop_name) = resolved_assignment_property_name(ctx, &expr.left, scope_id) else {
         return;
     };
     let Some(obj) = assignment_target_object(&expr.left) else {
         return;
     };
     let tag = infer_element_type(ctx, obj, scope_id);
-    if attribute_sink_kind(tag.as_deref(), prop_name) != Some(AttributeSinkKind::JavascriptUri) {
+    if attribute_sink_kind(tag.as_deref(), &prop_name) != Some(AttributeSinkKind::JavascriptUri) {
         return;
     }
     if !is_suspicious_value(ctx, &expr.right, scope_id) {
@@ -115,7 +115,7 @@ fn is_location_navigation_assignment<'a>(
                 .find_binding(scope_id, "location")
                 .is_none();
     }
-    if assignment_target_property_name(&expr.left) != Some("location") {
+    if resolved_assignment_property_name(ctx, &expr.left, scope_id).as_deref() != Some("location") {
         return false;
     }
     true

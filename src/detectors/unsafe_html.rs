@@ -7,7 +7,7 @@ use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
 use crate::inference::{
     attribute_sink_kind, infer_element_type, is_safe_expression, AttributeSinkKind,
 };
-use crate::utils::{assignment_target_object, assignment_target_property_name};
+use crate::utils::{assignment_target_object, resolved_assignment_property_name};
 
 use super::set_attribute_write;
 
@@ -19,10 +19,10 @@ pub fn check<'a>(
     scope_id: ScopeId,
     out: &mut Vec<RawMatch>,
 ) {
-    let Some(prop_name) = assignment_target_property_name(&expr.left) else {
+    let Some(prop_name) = resolved_assignment_property_name(ctx, &expr.left, scope_id) else {
         return;
     };
-    if HTML_PROPERTIES.contains(&prop_name) {
+    if HTML_PROPERTIES.contains(&prop_name.as_str()) {
         if !is_safe_expression(ctx, &expr.right, scope_id) {
             out.push(RawMatch {
                 detector: "unsafeHtml",
@@ -37,7 +37,7 @@ pub fn check<'a>(
         return;
     };
     let tag = infer_element_type(ctx, obj, scope_id);
-    if attribute_sink_kind(tag.as_deref(), prop_name) != Some(AttributeSinkKind::HtmlInjection) {
+    if attribute_sink_kind(tag.as_deref(), &prop_name) != Some(AttributeSinkKind::HtmlInjection) {
         return;
     }
     if prop_name.to_lowercase().starts_with("on") {

@@ -79,3 +79,37 @@ fn detects_document_write_through_iife_argument() {
     "#;
     assert_eq!(count_detector(code, D), 1);
 }
+
+#[test]
+fn detects_document_write_via_call() {
+    assert_eq!(
+        count_detector("document.write.call(document, userInput)", D),
+        1
+    );
+}
+
+#[test]
+fn detects_document_write_via_call_on_const_alias() {
+    let code = r#"
+        const w = document.write;
+        w.call(document, userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_document_write_via_apply_with_array_literal() {
+    let code = r#"
+        const w = document.write;
+        w.apply(document, [userInput]);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn ignores_document_write_call_with_static_argument() {
+    assert_eq!(
+        count_detector("document.write.call(document, '<p>safe</p>')", D),
+        0
+    );
+}
