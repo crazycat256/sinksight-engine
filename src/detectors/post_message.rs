@@ -296,6 +296,14 @@ fn expr_references_origin(expr: &Expression, event_param: &str) -> bool {
     expression_references_origin(expr, event_param)
 }
 
+/// Passing the origin to `console.*` reports it, it does not validate it, so
+/// such a call must not count as an origin check.
+fn is_console_call(call: &CallExpression) -> bool {
+    call.callee
+        .get_member_expr()
+        .is_some_and(|member| matches!(member.object(), Expression::Identifier(id) if id.name == "console"))
+}
+
 /// Checks whether an expression is
 /// `<eventParam>.origin` / `<eventParam>.source`, or contains such an
 /// access through a logical/binary/call/unary wrapper.
@@ -323,13 +331,15 @@ fn expression_references_origin(expr: &Expression, event_param: &str) -> bool {
                 || expression_references_origin(&b.right, event_param)
         }
         Expression::CallExpression(call) => {
-            call.arguments.iter().any(|a| {
-                a.as_expression()
-                    .is_some_and(|e| expression_references_origin(e, event_param))
-            }) || call
-                .callee
-                .get_member_expr()
-                .is_some_and(|m| expression_references_origin(m.object(), event_param))
+            (!is_console_call(call)
+                && call.arguments.iter().any(|a| {
+                    a.as_expression()
+                        .is_some_and(|e| expression_references_origin(e, event_param))
+                }))
+                || call
+                    .callee
+                    .get_member_expr()
+                    .is_some_and(|m| expression_references_origin(m.object(), event_param))
         }
         Expression::UnaryExpression(u) => expression_references_origin(&u.argument, event_param),
         _ => false,
