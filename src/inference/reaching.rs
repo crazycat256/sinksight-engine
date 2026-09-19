@@ -724,6 +724,31 @@ impl<'a, 'v> Analyzer<'a, 'v> {
         out
     }
 
+    /// Fact reaching the loop head on the second and later iterations, i.e.
+    /// `enter` joined with whatever flows back over the loop's back edge. On a
+    /// two-point lattice a single extra pass already reaches the fixpoint.
+    fn loop_carried_entry(
+        &mut self,
+        test: Option<&'a Expression<'a>>,
+        body: &'a Statement<'a>,
+        update: Option<&'a Expression<'a>>,
+        enter: Fact,
+        labels: &[String],
+    ) -> Fact {
+        let mut body_out = self.exec_stmt(body, enter, false);
+        let cont = take_matching(&mut body_out.continues, labels, true);
+        let Some(mut after) = join_opt(body_out.next, cont) else {
+            return enter;
+        };
+        if let Some(upd) = update {
+            after = self.exec_expr(upd, after, false).next.unwrap_or(after);
+        }
+        if let Some(test) = test {
+            after = self.exec_expr(test, after, false).next.unwrap_or(after);
+        }
+        enter.join(after)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn exec_conditioned_loop(
         &mut self,
@@ -753,16 +778,19 @@ impl<'a, 'v> Analyzer<'a, 'v> {
             }
         }
 
+        let loop_test = (!body_first).then_some(test);
         if until_use && self.contains_use(body.span()) {
-            let out = self.exec_stmt(body, enter, true);
+            let probe_in = self.loop_carried_entry(loop_test, body, update, enter, labels);
+            let out = self.exec_stmt(body, probe_in, true);
             if out.found.is_some() {
                 return out;
             }
         }
         if let Some(upd) = update {
             if until_use && self.contains_use(upd.span()) {
-                let body_out = self.exec_stmt(body, enter, false);
-                let fact = body_out.next.unwrap_or(enter);
+                let probe_in = self.loop_carried_entry(loop_test, body, update, enter, labels);
+                let body_out = self.exec_stmt(body, probe_in, false);
+                let fact = body_out.next.unwrap_or(probe_in);
                 return self.exec_expr(upd, fact, true);
             }
         }
@@ -830,7 +858,11 @@ impl<'a, 'v> Analyzer<'a, 'v> {
         labels: &[String],
     ) -> Outgoing {
         if until_use && self.contains_use(stmt.body.span()) {
-            let out = self.exec_stmt(&stmt.body, fact, true);
+            // The first iteration runs unconditionally, so `fact` is a real
+            // entry state and must be joined with the back edge.
+            let probe_in =
+                self.loop_carried_entry(Some(&stmt.test), &stmt.body, None, fact, labels);
+            let out = self.exec_stmt(&stmt.body, probe_in, true);
             if out.found.is_some() {
                 return out;
             }
@@ -879,7 +911,8 @@ impl<'a, 'v> Analyzer<'a, 'v> {
         labels: &[String],
     ) -> Outgoing {
         if until_use && self.contains_use(body.span()) {
-            return self.exec_stmt(body, fact, true);
+            let probe_in = self.loop_carried_entry(None, body, update, fact, labels);
+            return self.exec_stmt(body, probe_in, true);
         }
         let mut exits = Outgoing::empty();
         let mut body_in = fact;
@@ -974,7 +1007,16 @@ impl<'a, 'v> Analyzer<'a, 'v> {
         }
 
         if until_use && self.contains_use(body.span()) {
-            return self.exec_stmt(body, body_in, true);
+            // A head that re-binds the symbol overwrites it on every iteration,
+            // so nothing flows back over the loop's back edge.
+            let rebinds = matches!(left, ForStatementLeft::VariableDeclaration(_))
+                && for_left_writes_symbol(self.ctx, left, self.symbol_id);
+            let probe_in = if rebinds {
+                body_in
+            } else {
+                self.loop_carried_entry(None, body, None, body_in, labels)
+            };
+            return self.exec_stmt(body, probe_in, true);
         }
 
         let mut enter = body_in;
