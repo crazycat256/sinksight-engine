@@ -914,14 +914,35 @@ fn invalidates_object_if_a_property_is_mutated_dynamically() {
 }
 
 #[test]
-fn invalidates_object_if_a_property_is_mutated_dynamically_via_variable() {
+fn resolves_unmutated_property_when_another_is_mutated_via_const_key() {
     let code = r#"
         const obj = { a: "safe", b: "safe" };
         const prop = "b";
         obj[prop] = "unsafe";
         obj.a;
     "#;
+    assert_safe(code);
+}
+
+#[test]
+fn invalidates_specific_property_if_mutated_via_const_key() {
+    let code = r#"
+        const obj = { a: "safe", b: "safe" };
+        const prop = "a";
+        obj[prop] = "unsafe";
+        obj.a;
+    "#;
     assert_unsafe(code);
+}
+
+#[test]
+fn resolves_properties_accessed_via_const_key() {
+    let code = r#"
+        const obj = { a: "safe" };
+        const k = "a";
+        obj[k];
+    "#;
+    assert_safe(code);
 }
 
 #[test]

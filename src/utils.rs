@@ -509,7 +509,9 @@ fn resolve_identifier_inner<'a>(
                         && !ctx.semantic.scoping().symbol_is_mutated(symbol_id)
                     {
                         if let Some(mutated) = get_mutated_properties(ctx, symbol_id) {
-                            if let Some(prop_name) = member.static_property_name() {
+                            if let Some(prop_name) =
+                                resolved_member_property_name(ctx, member, scope_id)
+                            {
                                 if !mutated.contains(prop_name) {
                                     if let Some(value) = find_object_property_value(obj, prop_name)
                                     {
@@ -534,7 +536,7 @@ fn resolve_identifier_inner<'a>(
         let resolved_obj =
             resolve_identifier_inner(ctx, member.object(), scope_id, visited, depth + 1);
         if let Expression::ObjectExpression(obj) = resolved_obj {
-            if let Some(prop_name) = member.static_property_name() {
+            if let Some(prop_name) = resolved_member_property_name(ctx, member, scope_id) {
                 if let Some(value) = find_object_property_value(obj, prop_name) {
                     return resolve_identifier_inner(ctx, value, scope_id, visited, depth + 1);
                 }
@@ -544,7 +546,7 @@ fn resolve_identifier_inner<'a>(
         // `this.prop` resolution: look for the first `this.prop = value`
         // assignment inside the enclosing scope's subtree.
         if matches!(member.object(), Expression::ThisExpression(_)) {
-            if let Some(prop_name) = member.static_property_name() {
+            if let Some(prop_name) = resolved_member_property_name(ctx, member, scope_id) {
                 let key = format!("this.{prop_name}");
                 if !visited.contains(&key) {
                     visited.insert(key);
@@ -787,7 +789,7 @@ fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<Hash
         let parent_kind = nodes.kind(parent_id);
 
         let prop_name_at_depth_1 = if depth == 1 {
-            member_property_name_for_object_span(nodes, current_id, ref_span)
+            member_property_name_for_object_span(ctx, nodes, current_id, ref_span)
         } else {
             None
         };
@@ -901,17 +903,69 @@ fn simple_target_span(target: &SimpleAssignmentTarget) -> Option<Span> {
     }
 }
 
+/// Property name of a member access, including `obj[ident]` when `ident`
+/// folds to a string literal through constant bindings.
+fn resolved_member_property_name<'a>(
+    ctx: &AnalysisCtx<'a>,
+    member: &'a MemberExpression<'a>,
+    scope_id: ScopeId,
+) -> Option<&'a str> {
+    if let Some(name) = member.static_property_name() {
+        return Some(name);
+    }
+    let MemberExpression::ComputedMemberExpression(computed) = member else {
+        return None;
+    };
+    fold_to_string_literal(ctx, &computed.expression, scope_id, &mut HashSet::new())
+}
+
+/// Folds `expr` to a string literal through identifier constants only.
+/// Does not walk member expressions, so mutation analysis cannot re-enter
+/// itself via a key like `obj[obj.a]`.
+fn fold_to_string_literal<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &'a Expression<'a>,
+    scope_id: ScopeId,
+    visited: &mut HashSet<String>,
+) -> Option<&'a str> {
+    match unwrap_expression(expr) {
+        Expression::StringLiteral(lit) => Some(lit.value.as_str()),
+        Expression::Identifier(ident) => {
+            let name = ident.name.as_str();
+            if !visited.insert(name.to_string()) {
+                return None;
+            }
+            let scoping = ctx.semantic.scoping();
+            let symbol_id = scoping.find_binding(scope_id, name)?;
+            let is_constant_ish = !scoping.symbol_is_mutated(symbol_id)
+                || has_only_trivial_self_assignments(ctx, symbol_id, name);
+            if !is_constant_ish {
+                return None;
+            }
+            fold_to_string_literal(ctx, declarator_init(ctx, symbol_id)?, scope_id, visited)
+        }
+        _ => None,
+    }
+}
+
 /// Given the node id of the depth-1 member expression wrapping `ref_span`
-/// (i.e. `obj.prop` where `obj` is at `ref_span`), returns `prop`'s static
-/// name, if any.
+/// (i.e. `obj.prop` where `obj` is at `ref_span`), returns `prop`'s name
+/// if it is statically known or folds to a string literal.
 fn member_property_name_for_object_span<'a>(
+    ctx: &AnalysisCtx<'a>,
     nodes: &oxc_semantic::AstNodes<'a>,
     member_node_id: oxc_semantic::NodeId,
     _object_span: Span,
 ) -> Option<&'a str> {
     match nodes.kind(member_node_id) {
         AstKind::StaticMemberExpression(m) => Some(m.property.name.as_str()),
-        AstKind::ComputedMemberExpression(m) => m.static_property_name().map(|a| a.as_str()),
+        AstKind::ComputedMemberExpression(m) => {
+            if let Some(name) = m.static_property_name() {
+                return Some(name.as_str());
+            }
+            let scope_id = nodes.get_node(member_node_id).scope_id();
+            fold_to_string_literal(ctx, &m.expression, scope_id, &mut HashSet::new())
+        }
         _ => None,
     }
 }
