@@ -89,23 +89,35 @@ impl Store {
         })
     }
 
-    pub fn save(&mut self, captured: CapturedScript<'_>) -> Result<bool> {
-        let existing: Option<String> = self
+    /// Records where an already-stored script was seen, without re-analyzing
+    /// it. Returns `None` when the script is unknown, meaning the caller still
+    /// has to analyze it and call [`Store::save`]. Otherwise returns whether
+    /// this observation was new.
+    pub fn observe(&mut self, hash: &str, page_url: &str, script_url: &str) -> Result<Option<bool>> {
+        let known: Option<i64> = self
             .connection
-            .query_row(
-                "SELECT path FROM scripts WHERE hash = ?1",
-                [captured.hash],
-                |row| row.get(0),
-            )
+            .query_row("SELECT 1 FROM scripts WHERE hash = ?1", [hash], |row| {
+                row.get(0)
+            })
             .optional()?;
+        if known.is_none() {
+            return Ok(None);
+        }
+        let inserted = self.connection.execute(
+            "INSERT OR IGNORE INTO observations (hash, page_url, script_url)
+             VALUES (?1, ?2, ?3)",
+            params![hash, page_url, script_url],
+        )?;
+        Ok(Some(inserted != 0))
+    }
 
-        if existing.is_some() {
-            let inserted = self.connection.execute(
-                "INSERT OR IGNORE INTO observations (hash, page_url, script_url)
-                 VALUES (?1, ?2, ?3)",
-                params![captured.hash, captured.page_url, captured.script_url],
-            )?;
-            return Ok(inserted != 0);
+    pub fn save(&mut self, captured: CapturedScript<'_>) -> Result<bool> {
+        // Two identical scripts can reach analysis concurrently, so the
+        // caller's `observe` check does not make this one redundant.
+        if let Some(inserted) =
+            self.observe(captured.hash, captured.page_url, captured.script_url)?
+        {
+            return Ok(inserted);
         }
 
         let relative_path = script_path(captured.script_url, captured.hash);

@@ -486,10 +486,31 @@ async fn process(runtime: Arc<Runtime>, source: String, script_url: String, page
     {
         return;
     }
+    let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
+
+    // The same script is re-delivered on every page that loads it, so settle
+    // deduplication before paying for an analysis.
+    {
+        let mut store = runtime.store.lock().await;
+        match store.observe(&hash, &page_url, &script_url) {
+            Ok(Some(true)) => {
+                if let Err(error) = store.export() {
+                    eprintln!("Cannot export findings: {error:#}");
+                }
+                return;
+            }
+            Ok(Some(false)) => return,
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("Cannot record script observation: {error:#}");
+                return;
+            }
+        }
+    }
+
     let Ok(_permit) = runtime.semaphore.acquire().await else {
         return;
     };
-    let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
     let result = match runtime.analyzer.analyze(&source).await {
         Ok(result) => result,
         Err(error) => {
