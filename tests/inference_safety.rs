@@ -349,6 +349,30 @@ fn unsafe_string_of_unknown() {
     assert_unsafe("String(userInput)");
 }
 
+#[test]
+fn unsafe_new_array_with_unknown_arg() {
+    assert_unsafe("new Array(userInput)");
+}
+
+#[test]
+fn safe_new_array_with_static_args() {
+    assert_safe("new Array()");
+    assert_safe(r#"new Array("safe")"#);
+    assert_safe("new Array(1, 2, 3)");
+}
+
+#[test]
+fn unsafe_from_char_code_with_unknown_arg() {
+    assert_unsafe("String.fromCharCode(userInput)");
+    assert_unsafe("String.fromCodePoint(userInput)");
+}
+
+#[test]
+fn safe_from_char_code_with_static_args() {
+    assert_safe("String.fromCharCode(60, 98, 62)");
+    assert_safe("String.fromCodePoint(0x1f4a9)");
+}
+
 // Safe-to-stringify types --> toString / concatenation
 
 #[test]

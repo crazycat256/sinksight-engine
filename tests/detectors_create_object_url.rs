@@ -252,6 +252,57 @@ fn ignores_unrelated_url_method_calls() {
 }
 
 #[test]
+fn detects_window_url_create_object_url() {
+    assert_eq!(count_detector("window.URL.createObjectURL(blob)", D), 1);
+}
+
+#[test]
+fn detects_self_url_create_object_url() {
+    assert_eq!(count_detector("self.URL.createObjectURL(blob)", D), 1);
+}
+
+#[test]
+fn detects_global_this_url_create_object_url() {
+    assert_eq!(count_detector("globalThis.URL.createObjectURL(blob)", D), 1);
+}
+
+#[test]
+fn detects_url_constructor_aliased_from_window() {
+    let code = r#"
+        const U = window.URL;
+        U.createObjectURL(blob);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_dynamic_blob_with_html_mime_and_charset() {
+    let code = r#"
+        const blob = new Blob([userInput], { type: "text/html;charset=utf-8" });
+        URL.createObjectURL(blob);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_dynamic_blob_with_svg_mime_and_charset() {
+    let code = r#"
+        const blob = new Blob([userInput], { type: "image/svg+xml; charset=UTF-8" });
+        URL.createObjectURL(blob);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn ignores_dynamic_blob_with_plain_mime_and_charset() {
+    let code = r#"
+        const blob = new Blob([userInput], { type: "text/plain;charset=utf-8" });
+        URL.createObjectURL(blob);
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
 fn ignores_create_object_url_on_non_url_objects() {
     let code = r#"
         const myLib = { createObjectURL: (b) => "url" };

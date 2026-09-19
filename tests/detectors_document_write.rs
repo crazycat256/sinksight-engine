@@ -51,3 +51,31 @@ fn ignores_variable_resolving_to_static_string() {
     "#;
     assert_eq!(count_detector(code, D), 0);
 }
+
+#[test]
+fn detects_document_write_through_const_alias() {
+    let code = r#"
+        const doc = document;
+        doc.write(userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_document_writeln_through_window_document_alias() {
+    let code = r#"
+        const doc = window.document;
+        doc.writeln(userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_document_write_through_iife_argument() {
+    let code = r#"
+        (function(d) {
+            d.write(userInput);
+        })(document);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}

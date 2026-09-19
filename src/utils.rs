@@ -260,6 +260,10 @@ fn unwrap_expression_ref<'b>(expr: &'b Expression<'b>) -> &'b Expression<'b> {
 }
 
 /// Checks whether an expression has a statically safe URL prefix.
+///
+/// "Safe" means the leading literal already forces a non-`javascript`
+/// scheme (or a relative URL) according to the WHATWG basic URL parser,
+/// so the unknown remainder cannot turn the value into a `javascript:` URL.
 pub fn has_safe_url_prefix<'a>(
     ctx: &AnalysisCtx<'a>,
     expr: &'a Expression<'a>,
@@ -268,15 +272,75 @@ pub fn has_safe_url_prefix<'a>(
     let Some(literal) = get_leading_literal_text(ctx, expr, scope_id) else {
         return false;
     };
-    let lower = literal.to_lowercase();
-    const JS_SCHEME: &str = "javascript:";
-    if lower.starts_with(JS_SCHEME) {
-        return false;
+    leading_url_cannot_be_javascript_scheme(&literal)
+}
+
+/// Returns `true` when `literal` is a URL prefix that cannot parse as the
+/// `javascript` scheme, following the WHATWG basic URL parser:
+/// <https://url.spec.whatwg.org/#basic-url-parser>
+///
+/// Steps applied to a *prefix* of the full input:
+/// 1. Strip leading C0 controls and ASCII space (U+0000..=U+0020). Trailing
+///    trim is skipped because the unknown remainder sits after this prefix.
+/// 2. Remove every ASCII tab or newline (U+0009, U+000A, U+000D).
+/// 3. Parse a scheme the same way the scheme start / scheme states do.
+///
+/// If the prefix is consumed entirely by step 1, the remainder chooses the
+/// scheme. If a scheme is completed, it is `javascript` or it is not. If the
+/// scheme is still being built, it can become `javascript` only when the
+/// buffer is a prefix of that name. Any other first character falls through
+/// to the no-scheme state (relative URL against the document base).
+pub fn leading_url_cannot_be_javascript_scheme(literal: &str) -> bool {
+    match parse_leading_url_scheme(literal) {
+        LeadingScheme::Complete(scheme) => scheme != "javascript",
+        LeadingScheme::Incomplete(buffer) => !"javascript".starts_with(&buffer),
+        LeadingScheme::NoScheme => true,
+        LeadingScheme::RemainderChoosesScheme => false,
     }
-    if JS_SCHEME.starts_with(&lower) {
-        return false;
+}
+
+enum LeadingScheme {
+    Complete(String),
+    Incomplete(String),
+    NoScheme,
+    RemainderChoosesScheme,
+}
+
+fn parse_leading_url_scheme(literal: &str) -> LeadingScheme {
+    let without_leading_c0_space = literal.trim_start_matches(|c: char| c as u32 <= 0x20);
+    if without_leading_c0_space.is_empty() {
+        return LeadingScheme::RemainderChoosesScheme;
     }
-    true
+
+    let preprocessed: String = without_leading_c0_space
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    if preprocessed.is_empty() {
+        return LeadingScheme::RemainderChoosesScheme;
+    }
+
+    let mut chars = preprocessed.chars();
+    let Some(first) = chars.next() else {
+        return LeadingScheme::RemainderChoosesScheme;
+    };
+    if !first.is_ascii_alphabetic() {
+        return LeadingScheme::NoScheme;
+    }
+
+    let mut buffer = String::new();
+    buffer.push(first.to_ascii_lowercase());
+    for c in chars {
+        if c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.') {
+            buffer.push(c.to_ascii_lowercase());
+            continue;
+        }
+        if c == ':' {
+            return LeadingScheme::Complete(buffer);
+        }
+        return LeadingScheme::NoScheme;
+    }
+    LeadingScheme::Incomplete(buffer)
 }
 
 fn get_leading_literal_text<'a>(
@@ -1103,4 +1167,72 @@ fn resolve_this_property<'a>(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod url_scheme_tests {
+    use super::leading_url_cannot_be_javascript_scheme;
+
+    fn cannot_be_js(literal: &str) -> bool {
+        leading_url_cannot_be_javascript_scheme(literal)
+    }
+
+    #[test]
+    fn complete_https_scheme_cannot_be_javascript() {
+        assert!(cannot_be_js("https://"));
+        assert!(cannot_be_js("HTTPS://example.com/"));
+        assert!(cannot_be_js("http:"));
+        assert!(cannot_be_js("/relative/path"));
+        assert!(cannot_be_js("//host/path"));
+        assert!(cannot_be_js("?query"));
+        assert!(cannot_be_js("#hash"));
+        assert!(cannot_be_js("1javascript:"));
+        assert!(cannot_be_js("http"));
+        assert!(cannot_be_js("javascriptx:"));
+        assert!(cannot_be_js("javascriptx"));
+    }
+
+    #[test]
+    fn javascript_scheme_and_prefixes_can_still_be_javascript() {
+        assert!(!cannot_be_js("javascript:"));
+        assert!(!cannot_be_js("JAVASCRIPT:"));
+        assert!(!cannot_be_js("javascript:alert(1)"));
+        assert!(!cannot_be_js("java"));
+        assert!(!cannot_be_js("j"));
+        assert!(!cannot_be_js("javascript"));
+    }
+
+    #[test]
+    fn leading_c0_and_space_are_stripped_before_scheme_parse() {
+        assert!(!cannot_be_js(" "));
+        assert!(!cannot_be_js("   "));
+        assert!(!cannot_be_js("\n"));
+        assert!(!cannot_be_js("\t"));
+        assert!(!cannot_be_js("\u{0000}"));
+        assert!(!cannot_be_js(" javascript:"));
+        assert!(!cannot_be_js("  javascript:"));
+        assert!(!cannot_be_js("\njavascript:"));
+        assert!(!cannot_be_js("\tjavascript:"));
+        assert!(!cannot_be_js("\u{000c}javascript:"));
+        assert!(cannot_be_js(" https://"));
+        assert!(cannot_be_js("\nhttps://example.com/"));
+    }
+
+    #[test]
+    fn ascii_tab_and_newline_are_removed_from_the_whole_prefix() {
+        assert!(!cannot_be_js("java\nscript:"));
+        assert!(!cannot_be_js("java\tscript:"));
+        assert!(!cannot_be_js("java\rscript:"));
+        assert!(!cannot_be_js("java\r\nscript:alert(1)"));
+        assert!(!cannot_be_js("JAVA\tSCRIPT:"));
+        assert!(!cannot_be_js("javascript\t:"));
+        assert!(cannot_be_js("ht\ntp://"));
+        assert!(cannot_be_js("http\n:"));
+    }
+
+    #[test]
+    fn interior_space_resets_to_relative_url() {
+        assert!(cannot_be_js("java script:"));
+        assert!(cannot_be_js("javascript :"));
+    }
 }

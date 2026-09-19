@@ -5,7 +5,9 @@ use oxc_ast::ast::{CallExpression, Expression, NewExpression, ObjectPropertyKind
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
 use crate::inference::is_safe_expression;
-use crate::utils::{get_static_key_name, is_property_named, resolve_identifier, resolve_to_object};
+use crate::utils::{
+    get_static_key_name, is_property_named, is_window_like, resolve_identifier, resolve_to_object,
+};
 
 /// MIME types that can lead to script execution when loaded via an object
 /// URL. A Blob with one of these types can render HTML/SVG which may
@@ -26,7 +28,7 @@ pub fn check<'a>(
     scope_id: ScopeId,
     out: &mut Vec<RawMatch>,
 ) {
-    if !is_create_object_url_call(&call.callee) {
+    if !is_create_object_url_call(ctx, &call.callee, scope_id) {
         return;
     }
 
@@ -60,7 +62,7 @@ pub fn check<'a>(
 
                 let mime_type = extract_blob_mime_type(ctx, new_expr, ctor_name, scope_id);
                 if let Some(mime_type) = mime_type {
-                    if !EXECUTABLE_MIME_TYPES.contains(mime_type.to_lowercase().as_str()) {
+                    if !is_executable_mime(&mime_type) {
                         return;
                     }
                 }
@@ -83,14 +85,47 @@ pub fn check<'a>(
     });
 }
 
-fn is_create_object_url_call(callee: &Expression) -> bool {
+fn is_executable_mime(mime: &str) -> bool {
+    let essence = mime
+        .split(';')
+        .next()
+        .unwrap_or(mime)
+        .trim()
+        .to_ascii_lowercase();
+    EXECUTABLE_MIME_TYPES.contains(essence.as_str())
+}
+
+fn is_create_object_url_call<'a>(
+    ctx: &AnalysisCtx<'a>,
+    callee: &'a Expression<'a>,
+    scope_id: ScopeId,
+) -> bool {
     let Some(member) = callee.get_member_expr() else {
         return false;
     };
     if !is_property_named(member, &["createObjectURL"]) {
         return false;
     }
-    matches!(member.object(), Expression::Identifier(id) if id.name == "URL")
+    is_url_constructor(ctx, member.object(), scope_id)
+}
+
+fn is_url_constructor<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &'a Expression<'a>,
+    scope_id: ScopeId,
+) -> bool {
+    let resolved = resolve_identifier(ctx, expr, scope_id);
+    if let Expression::Identifier(id) = resolved {
+        return id.name == "URL";
+    }
+    let Some(member) = resolved.get_member_expr() else {
+        return false;
+    };
+    if !is_property_named(member, &["URL"]) {
+        return false;
+    }
+    let object = resolve_identifier(ctx, member.object(), scope_id);
+    is_window_like(ctx, object, scope_id)
 }
 
 fn is_blob_content_safe<'a>(

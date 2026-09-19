@@ -118,7 +118,7 @@ const LODASH: Target = Target {
     name: "lodash.min.js",
     url: "https://unpkg.com/lodash@4.17.21/lodash.min.js",
     sri: "sha256-qXBd/EfAdjOA2FGrGAG+b3YBn2tn5A6bhz+LSgYD96k=",
-    expected_findings: &[],
+    expected_findings: &[ef!("functionConstructor", 105, 27)],
 };
 
 const PDF: Target = Target {

@@ -117,11 +117,11 @@ fn is_safe_expression_inner<'a>(
 
     if let Expression::NewExpression(new_expr) = resolved {
         if let Expression::Identifier(callee) = &new_expr.callee {
-            // RegExp is not in SAFE_TO_STRINGIFY_TYPES because
-            // `new RegExp(userInput).toString()` echoes the
-            // attacker-controlled pattern; it's safe only when every
-            // constructor argument is itself provably safe.
-            if callee.name == "RegExp" {
+            // RegExp and Array are not in SAFE_TO_STRINGIFY_TYPES because
+            // `new RegExp(userInput).toString()` and `String(new Array(userInput))`
+            // echo constructor arguments; they are safe only when every
+            // argument is itself provably safe.
+            if matches!(callee.name.as_str(), "RegExp" | "Array") {
                 return new_expr.arguments.iter().all(|a| match a.as_expression() {
                     Some(e) => is_safe_expression_inner(ctx, e, scope_id, visited),
                     None => true,

@@ -62,3 +62,30 @@ fn ignores_multiple_arguments_with_static_body() {
     "#;
     assert_eq!(count_detector(code, D), 0);
 }
+
+#[test]
+fn detects_function_constructor_through_const_alias() {
+    let code = r#"
+        const F = Function;
+        new F(userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_function_call_through_const_alias() {
+    let code = r#"
+        const F = Function;
+        F("x", userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_function_constructor_aliased_from_window() {
+    let code = r#"
+        const F = window.Function;
+        new F(userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}

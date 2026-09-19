@@ -89,7 +89,8 @@ pub static SAFE_TO_STRINGIFY_TYPES: LazyLock<HashSet<&'static str>> = LazyLock::
         // attacker-controlled pattern.
         "Error",
         "URL",
-        "Array",
+        // Array is not here: `String(new Array(userInput))` joins elements,
+        // so attacker-controlled entries become the stringified value.
         "Map",
         "Set",
         "Symbol",

@@ -2,7 +2,7 @@ use oxc_ast::ast::{Argument, CallExpression, Expression, NewExpression};
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
 use crate::inference::is_safe_expression;
-use crate::utils::matches_callee_names;
+use crate::utils::{matches_callee_names, resolve_identifier};
 
 const FUNCTION_NAMES: &[&str] = &["Function"];
 
@@ -12,7 +12,7 @@ pub fn check_new<'a>(
     scope_id: ScopeId,
     out: &mut Vec<RawMatch>,
 ) {
-    if is_function_reference(&new_expr.callee)
+    if is_function_reference(ctx, &new_expr.callee, scope_id)
         && has_dynamic_function_arguments(ctx, &new_expr.arguments, scope_id)
     {
         out.push(RawMatch {
@@ -29,7 +29,7 @@ pub fn check_call<'a>(
     scope_id: ScopeId,
     out: &mut Vec<RawMatch>,
 ) {
-    if is_function_reference(&call.callee)
+    if is_function_reference(ctx, &call.callee, scope_id)
         && has_dynamic_function_arguments(ctx, &call.arguments, scope_id)
     {
         out.push(RawMatch {
@@ -40,8 +40,19 @@ pub fn check_call<'a>(
     }
 }
 
-fn is_function_reference(callee: &Expression) -> bool {
-    matches_callee_names(callee, FUNCTION_NAMES)
+fn is_function_reference<'a>(
+    ctx: &AnalysisCtx<'a>,
+    callee: &'a Expression<'a>,
+    scope_id: ScopeId,
+) -> bool {
+    if matches_callee_names(callee, FUNCTION_NAMES) {
+        return true;
+    }
+    let resolved = resolve_identifier(ctx, callee, scope_id);
+    if !std::ptr::eq(resolved, callee) {
+        return matches_callee_names(resolved, FUNCTION_NAMES);
+    }
+    false
 }
 
 fn has_dynamic_function_arguments<'a>(

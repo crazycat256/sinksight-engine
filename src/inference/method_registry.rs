@@ -452,8 +452,8 @@ pub static STATIC_METHODS: LazyLock<HashMap<&'static str, MethodMap>> = LazyLock
         (
             "String",
             HashMap::from([
-                ("fromCharCode", always(InferredType::STRING)),
-                ("fromCodePoint", always(InferredType::STRING)),
+                ("fromCharCode", preserves_all(InferredType::STRING)),
+                ("fromCodePoint", preserves_all(InferredType::STRING)),
             ]),
         ),
         (

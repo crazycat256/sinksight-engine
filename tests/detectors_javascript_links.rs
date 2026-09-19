@@ -458,3 +458,58 @@ fn ignores_self_assigned_variable() {
     "#;
     assert_eq!(count_detector(code, D), 0);
 }
+
+#[test]
+fn detects_leading_space_before_dynamic_url() {
+    assert_eq!(count_detector(r#"location.href = " " + userInput"#, D), 1);
+}
+
+#[test]
+fn detects_leading_newline_before_dynamic_url() {
+    assert_eq!(count_detector("location.href = \"\\n\" + userInput", D), 1);
+}
+
+#[test]
+fn detects_padded_javascript_scheme() {
+    assert_eq!(
+        count_detector(r#"location.href = "  javascript:" + userInput"#, D),
+        1
+    );
+}
+
+#[test]
+fn detects_javascript_scheme_with_embedded_newline() {
+    assert_eq!(
+        count_detector("location.href = \"java\\nscript:\" + userInput", D),
+        1
+    );
+}
+
+#[test]
+fn detects_javascript_scheme_with_embedded_tab() {
+    assert_eq!(
+        count_detector("location.href = \"JAVA\\tSCRIPT:\" + userInput", D),
+        1
+    );
+}
+
+#[test]
+fn detects_location_replace_with_leading_space() {
+    assert_eq!(count_detector(r#"location.replace(" " + userInput)"#, D), 1);
+}
+
+#[test]
+fn ignores_relative_path_prefix() {
+    assert_eq!(
+        count_detector(r#"location.href = "/app/" + userInput"#, D),
+        0
+    );
+}
+
+#[test]
+fn ignores_scheme_relative_prefix() {
+    assert_eq!(
+        count_detector(r#"a.href = "//cdn.example/" + userInput"#, D),
+        0
+    );
+}

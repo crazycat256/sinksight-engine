@@ -2,7 +2,7 @@ use oxc_ast::ast::CallExpression;
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
 use crate::inference::is_safe_expression;
-use crate::utils::{is_document_object, is_property_named};
+use crate::utils::{is_document_object, is_property_named, resolve_identifier};
 
 pub fn check<'a>(
     ctx: &AnalysisCtx<'a>,
@@ -10,7 +10,7 @@ pub fn check<'a>(
     scope_id: ScopeId,
     out: &mut Vec<RawMatch>,
 ) {
-    if !is_document_write_call(call) {
+    if !is_document_write_call(ctx, call, scope_id) {
         return;
     }
     let has_unsafe_arg = call.arguments.iter().any(|arg| {
@@ -27,12 +27,17 @@ pub fn check<'a>(
     }
 }
 
-fn is_document_write_call(call: &CallExpression) -> bool {
+fn is_document_write_call<'a>(
+    ctx: &AnalysisCtx<'a>,
+    call: &'a CallExpression<'a>,
+    scope_id: ScopeId,
+) -> bool {
     let Some(member) = call.callee.get_member_expr() else {
         return false;
     };
-    if !is_document_object(member.object()) {
+    if !is_property_named(member, &["write", "writeln"]) {
         return false;
     }
-    is_property_named(member, &["write", "writeln"])
+    let object = resolve_identifier(ctx, member.object(), scope_id);
+    is_document_object(object)
 }

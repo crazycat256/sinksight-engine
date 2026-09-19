@@ -162,3 +162,32 @@ fn ignores_reassigned_variable_that_is_later_assigned_a_safe_value() {
 fn still_detects_inner_html_self_assignment() {
     assert_eq!(count_detector("el.innerHTML = el.innerHTML", D), 1);
 }
+
+#[test]
+fn detects_inner_html_from_new_array_of_dynamic_content() {
+    assert_eq!(count_detector("el.innerHTML = new Array(userInput)", D), 1);
+}
+
+#[test]
+fn ignores_inner_html_from_new_array_of_static_content() {
+    assert_eq!(
+        count_detector(r#"el.innerHTML = new Array("safe", "also safe")"#, D),
+        0
+    );
+}
+
+#[test]
+fn detects_inner_html_from_dynamic_from_char_code() {
+    assert_eq!(
+        count_detector("el.innerHTML = String.fromCharCode(userInput)", D),
+        1
+    );
+}
+
+#[test]
+fn ignores_inner_html_from_static_from_char_code() {
+    assert_eq!(
+        count_detector("el.innerHTML = String.fromCharCode(60, 98, 62)", D),
+        0
+    );
+}
