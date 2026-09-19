@@ -631,12 +631,9 @@ fn unsafe_arrow_function_parameter_is_considered_unsafe() {
     assert_unsafe(code);
 }
 
-// The conservative analysis considers every assignment, including the
-// initializer. It cannot yet narrow these cases to reachable branches, so
-// the safety-only cases below remain ignored.
+// Control-flow reaching definitions.
 
 #[test]
-#[ignore = "requires backward control-flow narrowing not implemented in the Rust engine (see inference::safety module docs)"]
 fn optimizes_always_true_condition() {
     let code = r#"
         let a = getUserInput();
@@ -651,7 +648,6 @@ fn optimizes_always_true_condition() {
 }
 
 #[test]
-#[ignore = "requires backward control-flow narrowing not implemented in the Rust engine (see inference::safety module docs)"]
 fn optimizes_always_false_condition() {
     let code = r#"
         let a = getUserInput();
@@ -694,7 +690,6 @@ fn detects_unsafe_branch_in_always_false_condition() {
 }
 
 #[test]
-#[ignore = "requires backward control-flow narrowing not implemented in the Rust engine (see inference::safety module docs)"]
 fn ignores_if_both_branches_assign_safe_values() {
     let code = r#"
         let a = getUserInput();
@@ -784,6 +779,208 @@ fn ignores_if_condition_unknown_one_branch_safe_alternate_empty_previous_safe() 
         a;
     "#;
     assert_safe(code);
+}
+
+#[test]
+fn nested_if_both_inner_branches_overwrite_with_safe() {
+    let code = r#"
+        let a = getUserInput();
+        if (x) {
+            if (y) {
+                a = "safe 1";
+            } else {
+                a = "safe 2";
+            }
+        } else {
+            a = "safe 3";
+        }
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn return_in_unknown_branch_does_not_keep_overwritten_unsafe() {
+    let code = r#"
+        let a = getUserInput();
+        if (condition) {
+            return;
+        }
+        a = "safe";
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn use_after_early_return_that_did_not_overwrite_stays_unsafe() {
+    let code = r#"
+        let a = getUserInput();
+        if (condition) {
+            a = "safe";
+            return;
+        }
+        a;
+    "#;
+    assert_unsafe(code);
+}
+
+#[test]
+fn while_false_does_not_apply_dead_unsafe_body() {
+    let code = r#"
+        let a = "safe";
+        while (false) {
+            a = getUserInput();
+        }
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn while_unknown_may_assign_unsafe() {
+    let code = r#"
+        let a = "safe";
+        while (condition) {
+            a = getUserInput();
+        }
+        a;
+    "#;
+    assert_unsafe(code);
+}
+
+#[test]
+fn do_while_body_always_runs() {
+    let code = r#"
+        let a = getUserInput();
+        do {
+            a = "safe";
+        } while (false);
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn for_loop_break_after_safe_assign() {
+    let code = r#"
+        let a = getUserInput();
+        for (;;) {
+            a = "safe";
+            break;
+        }
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn switch_all_reachable_cases_assign_safe() {
+    let code = r#"
+        let a = getUserInput();
+        switch (x) {
+            case 1:
+                a = "safe 1";
+                break;
+            default:
+                a = "safe 2";
+        }
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn switch_without_default_keeps_previous_unsafe() {
+    let code = r#"
+        let a = getUserInput();
+        switch (x) {
+            case 1:
+                a = "safe";
+                break;
+        }
+        a;
+    "#;
+    assert_unsafe(code);
+}
+
+#[test]
+fn switch_static_discriminant_takes_matching_case() {
+    let code = r#"
+        let a = getUserInput();
+        switch (1) {
+            case 1:
+                a = "safe";
+                break;
+            default:
+                a = getUserInput();
+        }
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn try_finally_assignment_dominates() {
+    let code = r#"
+        let a = getUserInput();
+        try {
+        } finally {
+            a = "safe";
+        }
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn iife_reassignment_is_applied() {
+    let code = r#"
+        let a = getUserInput();
+        (function () {
+            a = "safe";
+        })();
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn labeled_break_skips_dead_unsafe_assignment() {
+    let code = r#"
+        let a = getUserInput();
+        foo: {
+            a = "safe";
+            if (true) break foo;
+            a = getUserInput();
+        }
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn for_of_empty_array_does_not_run_body() {
+    let code = r#"
+        let a = "safe";
+        for (const x of []) {
+            a = getUserInput();
+        }
+        a;
+    "#;
+    assert_safe(code);
+}
+
+#[test]
+fn for_in_unknown_object_may_assign_unsafe() {
+    let code = r#"
+        let a = "safe";
+        for (const k in obj) {
+            a = getUserInput();
+        }
+        a;
+    "#;
+    assert_unsafe(code);
 }
 
 // Object property tracking

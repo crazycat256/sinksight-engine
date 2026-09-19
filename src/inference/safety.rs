@@ -1,10 +1,9 @@
 //! Conservative safety inference for expressions and assignments.
 //!
-//! The analysis does not perform control-flow-sensitive backward narrowing
-//! over sibling statements because oxc's `AstNodes` has parent pointers but
-//! no sibling index. It instead requires every possible assignment to be
-//! safe. This cannot classify an unsafe expression as safe, but it can
-//! produce false positives when a later assignment dominates the use site.
+//! Identifier uses are answered with intra-procedural reaching definitions
+//! (see [`super::reaching`]): last write, if/else join, constant-condition
+//! pruning, loops, switch, try/finally, IIFE execution, and return/break.
+//! Uses of an outer binding inside a nested function stay flow-insensitive.
 
 use std::collections::HashSet;
 
@@ -14,11 +13,13 @@ use oxc_ast::AstKind;
 use crate::ctx::{AnalysisCtx, ScopeId};
 use crate::inference::types::{is_safe_to_stringify, SafetyBehavior};
 use crate::utils::{
-    declarator_init, is_parameter_binding, is_variable_declarator_binding, resolve_identifier,
-    resolve_iife_param, resolve_named_function_param,
+    declarator_init, is_const_variable_binding, is_parameter_binding,
+    is_variable_declarator_binding, resolve_identifier, resolve_iife_param,
+    resolve_named_function_param, unwrap_expression,
 };
 
 use super::method_registry::{get_global_function, get_instance_method, get_static_method};
+use super::reaching::identifier_use_is_safe;
 use super::type_inference::infer_type;
 
 /// Returns `true` when `expr` is provably safe from injection.
@@ -30,12 +31,32 @@ pub fn is_safe_expression<'a>(
     is_safe_expression_inner(ctx, expr, scope_id, &mut HashSet::new())
 }
 
-fn is_safe_expression_inner<'a>(
+pub(crate) fn is_safe_expression_inner<'a>(
     ctx: &AnalysisCtx<'a>,
     expr: &'a Expression<'a>,
     scope_id: ScopeId,
     visited: &mut HashSet<String>,
 ) -> bool {
+    if let Expression::Identifier(ident) = expr {
+        if let Some(safe) = identifier_use_is_safe(ctx, ident, scope_id, visited) {
+            return safe;
+        }
+    }
+
+    // Sequence/assignment must be peeled on the original node. `resolve_identifier`
+    // would otherwise collapse `(a = "safe", a)` to the identifier `a` and fall
+    // through to the flow-insensitive assignment scan.
+    let unwrapped = unwrap_expression(expr);
+    if let Expression::SequenceExpression(seq) = unwrapped {
+        return seq
+            .expressions
+            .last()
+            .is_some_and(|e| is_safe_expression_inner(ctx, e, scope_id, visited));
+    }
+    if let Expression::AssignmentExpression(assign) = unwrapped {
+        return is_safe_expression_inner(ctx, &assign.right, scope_id, visited);
+    }
+
     let resolved = resolve_identifier(ctx, expr, scope_id);
 
     // Template literals: safe only if every interpolation is safe. Must be
@@ -155,13 +176,10 @@ fn is_literal(expr: &Expression) -> bool {
 // Non-constant variable safety
 // ---------------------------------------------------------------------------
 
-/// For a non-constant variable (e.g. `let`), checks whether every value it
-/// can ever hold is safe: the initializer (if any) and every subsequent
-/// plain assignment (`a = expr`). Returns `false` when the binding cannot
-/// be found, is a parameter with no resolvable call-site argument, or any
-/// value is not provably safe. See the module documentation regarding the
-/// deliberate absence of backward flow narrowing.
-fn all_assignments_safe<'a>(
+/// Flow-insensitive fallback: every initializer and plain assignment to
+/// `name` must be safe. Used for nested-function uses of an outer binding,
+/// where the closure may run at any time.
+pub(crate) fn all_assignments_safe<'a>(
     ctx: &AnalysisCtx<'a>,
     name: &str,
     scope_id: ScopeId,
@@ -206,6 +224,10 @@ fn all_assignments_safe<'a>(
         // Not a var/let/const declarator (e.g. catch clause param, import,
         // hoisted function declaration) — assume unsafe.
         return false;
+    }
+
+    if is_const_variable_binding(ctx, symbol_id) {
+        return true;
     }
 
     let nodes = ctx.semantic.nodes();

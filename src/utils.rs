@@ -743,6 +743,15 @@ pub(crate) fn is_variable_declarator_binding(ctx: &AnalysisCtx, symbol_id: Symbo
     )
 }
 
+/// `const` bindings are never reassigned: a later write throws and does not
+/// update the value that reaches uses.
+pub(crate) fn is_const_variable_binding(ctx: &AnalysisCtx, symbol_id: SymbolId) -> bool {
+    ctx.semantic
+        .scoping()
+        .symbol_flags(symbol_id)
+        .is_const_variable()
+}
+
 /// Whether `symbol_id` is bound by a `FormalParameter`.
 pub(crate) fn is_parameter_binding(ctx: &AnalysisCtx, symbol_id: SymbolId) -> bool {
     let scoping = ctx.semantic.scoping();

@@ -144,11 +144,7 @@ fn ignores_multiple_assignments_on_a_single_line_with_final_static_value() {
     assert_eq!(count_detector(code, D), 0);
 }
 
-// Backward flow narrowing is not implemented. The conservative analysis
-// therefore considers the overwritten unsafe initializer and reports this
-// reassigned-to-safe case as a known false positive.
 #[test]
-#[ignore = "requires backward control-flow narrowing not implemented in the Rust engine (see inference::safety module docs)"]
 fn ignores_reassigned_variable_that_is_later_assigned_a_safe_value() {
     let code = r#"
         let a = getUserInput();
@@ -275,6 +271,70 @@ fn detects_inner_html_via_concatenated_const_variables() {
         const a = 'inner';
         const b = 'HTML';
         el[a + b] = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn ignores_inner_html_after_both_branches_assign_safe() {
+    let code = r#"
+        let a = getUserInput();
+        if (cond) {
+            a = "<p>ok</p>";
+        } else {
+            a = "<p>also ok</p>";
+        }
+        el.innerHTML = a;
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
+fn detects_inner_html_when_one_branch_stays_unsafe() {
+    let code = r#"
+        let a = getUserInput();
+        if (cond) {
+            a = "<p>ok</p>";
+        }
+        el.innerHTML = a;
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn ignores_inner_html_after_iife_overwrites_with_safe() {
+    let code = r#"
+        let a = getUserInput();
+        (function () {
+            a = "<p>ok</p>";
+        })();
+        el.innerHTML = a;
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
+fn ignores_inner_html_after_finally_overwrites_with_safe() {
+    let code = r#"
+        let a = getUserInput();
+        try {
+            a = getUserInput();
+        } finally {
+            a = "<p>ok</p>";
+        }
+        el.innerHTML = a;
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
+fn detects_inner_html_after_for_in_concatenates_unknown_values() {
+    let code = r#"
+        let html = "<table>";
+        for (const key in data) {
+            html += data[key];
+        }
+        el.innerHTML = html;
     "#;
     assert_eq!(count_detector(code, D), 1);
 }
