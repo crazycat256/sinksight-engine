@@ -28,7 +28,7 @@ struct ExportFinding {
     detector: String,
     category: String,
     snippet: String,
-    script_url: String,
+    script_urls: Vec<String>,
     page_urls: Vec<String>,
 }
 
@@ -36,9 +36,11 @@ struct ExportFinding {
 #[serde(rename_all = "camelCase")]
 struct ExportScript {
     file: String,
-    script_url: String,
+    script_urls: Vec<String>,
     page_urls: Vec<String>,
     library: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    analysis_error: Option<String>,
 }
 
 pub struct Store {
@@ -57,16 +59,17 @@ impl Store {
              CREATE TABLE IF NOT EXISTS scripts (
                  hash TEXT PRIMARY KEY,
                  path TEXT NOT NULL,
-                 script_url TEXT NOT NULL,
                  source TEXT NOT NULL,
                  structural_hash TEXT NOT NULL,
                  library_json TEXT NOT NULL,
+                 analysis_error TEXT,
                  captured_at INTEGER NOT NULL
              );
              CREATE TABLE IF NOT EXISTS observations (
                  hash TEXT NOT NULL REFERENCES scripts(hash) ON DELETE CASCADE,
                  page_url TEXT NOT NULL,
-                 PRIMARY KEY (hash, page_url)
+                 script_url TEXT NOT NULL,
+                 PRIMARY KEY (hash, page_url, script_url)
              );
              CREATE TABLE IF NOT EXISTS findings (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,37 +101,38 @@ impl Store {
 
         if existing.is_some() {
             let inserted = self.connection.execute(
-                "INSERT OR IGNORE INTO observations (hash, page_url) VALUES (?1, ?2)",
-                params![captured.hash, captured.page_url],
+                "INSERT OR IGNORE INTO observations (hash, page_url, script_url)
+                 VALUES (?1, ?2, ?3)",
+                params![captured.hash, captured.page_url, captured.script_url],
             )?;
             return Ok(inserted != 0);
         }
 
-        let relative_path = script_path(captured.page_url, captured.script_url, captured.hash);
+        let relative_path = script_path(captured.script_url, captured.hash);
         let absolute_path = self.output.join(&relative_path);
         if let Some(parent) = absolute_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        atomic_write(&absolute_path, captured.result.pretty_content.as_bytes())?;
+        atomic_write(&absolute_path, captured.source.as_bytes())?;
 
         let transaction = self.connection.transaction()?;
         transaction.execute(
             "INSERT INTO scripts
-             (hash, path, script_url, source, structural_hash, library_json, captured_at)
+             (hash, path, source, structural_hash, library_json, analysis_error, captured_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 captured.hash,
                 path_string(&relative_path),
-                captured.script_url,
                 captured.source,
                 captured.result.structural_hash,
                 serde_json::to_string(&captured.result.library)?,
+                captured.result.analysis_error,
                 unix_timestamp(),
             ],
         )?;
         transaction.execute(
-            "INSERT INTO observations (hash, page_url) VALUES (?1, ?2)",
-            params![captured.hash, captured.page_url],
+            "INSERT INTO observations (hash, page_url, script_url) VALUES (?1, ?2, ?3)",
+            params![captured.hash, captured.page_url, captured.script_url],
         )?;
         for finding in &captured.result.findings {
             transaction.execute(
@@ -153,7 +157,7 @@ impl Store {
 
     pub fn export(&self) -> Result<()> {
         let mut statement = self.connection.prepare(
-            "SELECT f.id, s.hash, s.path, s.script_url,
+            "SELECT f.id, s.hash, s.path,
                     f.detector, f.category, f.start_line, f.start_column,
                     f.end_line, f.end_column, f.snippet
              FROM findings f JOIN scripts s ON s.hash = f.hash
@@ -164,18 +168,18 @@ impl Store {
         while let Some(row) = rows.next()? {
             let hash: String = row.get(1)?;
             let page_urls = self.page_urls(&hash)?;
-            let start_line: u32 = row.get(6)?;
-            let start_column: u32 = row.get(7)?;
-            let end_line: u32 = row.get(8)?;
-            let end_column: u32 = row.get(9)?;
+            let start_line: u32 = row.get(5)?;
+            let start_column: u32 = row.get(6)?;
+            let end_line: u32 = row.get(7)?;
+            let end_column: u32 = row.get(8)?;
             findings.push(ExportFinding {
                 id: row.get(0)?,
                 file: row.get(2)?,
                 location: format!("L{start_line}:{start_column}-L{end_line}:{end_column}"),
-                script_url: row.get(3)?,
-                detector: row.get(4)?,
-                category: row.get(5)?,
-                snippet: row.get(10)?,
+                script_urls: self.script_urls(&hash)?,
+                detector: row.get(3)?,
+                category: row.get(4)?,
+                snippet: row.get(9)?,
                 page_urls,
             });
         }
@@ -188,7 +192,7 @@ impl Store {
             "sink",
             "category",
             "snippet",
-            "script_url",
+            "script_urls",
             "page_urls",
         ])?;
         for finding in &findings {
@@ -199,7 +203,7 @@ impl Store {
                 finding.detector.clone(),
                 finding.category.clone(),
                 finding.snippet.clone(),
-                finding.script_url.clone(),
+                finding.script_urls.join(" "),
                 finding.page_urls.join(" "),
             ])?;
         }
@@ -226,25 +230,26 @@ impl Store {
             &(serde_json::to_vec_pretty(&origins)?),
         )?;
 
-        let mut statement = self
-            .connection
-            .prepare("SELECT hash, path, script_url, library_json FROM scripts ORDER BY path")?;
+        let mut statement = self.connection.prepare(
+            "SELECT hash, path, library_json, analysis_error FROM scripts ORDER BY path",
+        )?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })?;
         let mut scripts = Vec::new();
         for row in rows {
-            let (hash, file, script_url, library) = row?;
+            let (hash, file, library, analysis_error) = row?;
             scripts.push(ExportScript {
                 file,
-                script_url,
+                script_urls: self.script_urls(&hash)?,
                 page_urls: self.page_urls(&hash)?,
                 library: serde_json::from_str(&library)?,
+                analysis_error,
             });
         }
         atomic_write(
@@ -255,23 +260,29 @@ impl Store {
     }
 
     fn page_urls(&self, hash: &str) -> Result<Vec<String>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT page_url FROM observations WHERE hash = ?1 ORDER BY page_url")?;
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT page_url FROM observations WHERE hash = ?1 ORDER BY page_url",
+        )?;
         let page_urls = statement
             .query_map([hash], |row| row.get(0))?
             .collect::<Result<Vec<String>, _>>()
             .map_err(Into::into);
         page_urls
     }
+
+    fn script_urls(&self, hash: &str) -> Result<Vec<String>> {
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT script_url FROM observations
+             WHERE hash = ?1 AND script_url != '' ORDER BY script_url",
+        )?;
+        let urls = statement
+            .query_map([hash], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(urls)
+    }
 }
 
-fn script_path(page_url: &str, script_url: &str, hash: &str) -> PathBuf {
-    let origin = Url::parse(page_url)
-        .ok()
-        .and_then(|url| url.host_str().map(sanitize_segment))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "_unknown".to_owned());
+fn script_path(script_url: &str, hash: &str) -> PathBuf {
     let name = Url::parse(script_url)
         .ok()
         .and_then(|url| {
@@ -287,8 +298,8 @@ fn script_path(page_url: &str, script_url: &str, hash: &str) -> PathBuf {
         format!("{name}.js")
     };
     PathBuf::from("scripts")
-        .join(origin)
-        .join(format!("{}-{name}", hash.get(..12).unwrap_or(hash)))
+        .join(hash.get(..2).unwrap_or("00"))
+        .join(format!("{hash}-{name}"))
 }
 
 fn sanitize_segment(value: &str) -> String {

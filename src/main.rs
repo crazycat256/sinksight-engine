@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use sinksight_engine::analyze;
 use sinksight_engine::collector::{self, Config, Mode};
+use sinksight_engine::worker::Pool;
 
 #[derive(Parser)]
 #[command(
@@ -37,6 +37,8 @@ enum Command {
         #[arg(long)]
         library_db: Option<PathBuf>,
     },
+    #[command(hide = true)]
+    AnalysisWorker,
 }
 
 #[tokio::main]
@@ -47,9 +49,12 @@ async fn main() -> Result<()> {
                 .await
                 .with_context(|| format!("cannot read {}", path.display()))?;
             let library_db = read_optional(library_db).await?;
+            let executable =
+                std::env::current_exe().context("cannot locate sinksight executable")?;
+            let analyzer = Pool::new(&executable, library_db, 1);
             println!(
                 "{}",
-                serde_json::to_string_pretty(&analyze(&source, library_db.as_deref()))?
+                serde_json::to_string_pretty(&analyzer.analyze(&source).await?)?
             );
         }
         Command::Collect {
@@ -67,12 +72,15 @@ async fn main() -> Result<()> {
                 library_db: read_optional(library_db).await?,
                 max_script_bytes,
                 analysis_concurrency,
+                analysis_worker: std::env::current_exe()
+                    .context("cannot locate sinksight executable")?,
             };
             tokio::select! {
                 result = collector::run(config) => result?,
                 result = tokio::signal::ctrl_c() => result.context("cannot listen for Ctrl-C")?,
             }
         }
+        Command::AnalysisWorker => sinksight_engine::worker::serve().await?,
     }
     Ok(())
 }

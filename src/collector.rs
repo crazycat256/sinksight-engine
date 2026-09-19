@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 
 use crate::cdp::{has_error_code, Client, Event};
 use crate::store::{CapturedScript, Store};
-use crate::Analyzer;
+use crate::worker::Pool;
 
 #[derive(Clone, Copy, Debug, Default, ValueEnum)]
 pub enum Mode {
@@ -29,6 +29,7 @@ pub struct Config {
     pub library_db: Option<Vec<u8>>,
     pub max_script_bytes: usize,
     pub analysis_concurrency: usize,
+    pub analysis_worker: PathBuf,
 }
 
 #[derive(Clone)]
@@ -42,23 +43,24 @@ struct Runtime {
     store: Mutex<Store>,
     targets: RwLock<HashMap<String, Target>>,
     network_scripts: Mutex<HashMap<(String, String), (String, String)>>,
-    analyzer: Analyzer,
+    analyzer: Pool,
     max_script_bytes: usize,
     semaphore: Semaphore,
+    source_retrievals: Semaphore,
     unavailable_source_reported: AtomicBool,
 }
 
 pub async fn run(config: Config) -> Result<()> {
-    let analyzer = Analyzer::new(config.library_db.as_deref())
-        .map_err(anyhow::Error::msg)
-        .context("invalid library database")?;
+    let concurrency = config.analysis_concurrency.max(1);
+    let analyzer = Pool::new(&config.analysis_worker, config.library_db, concurrency);
     let runtime = Arc::new(Runtime {
         store: Mutex::new(Store::open(&config.output)?),
         targets: RwLock::new(HashMap::new()),
         network_scripts: Mutex::new(HashMap::new()),
         analyzer,
         max_script_bytes: config.max_script_bytes,
-        semaphore: Semaphore::new(config.analysis_concurrency.max(1)),
+        semaphore: Semaphore::new(concurrency),
+        source_retrievals: Semaphore::new(concurrency.saturating_mul(2)),
         unavailable_source_reported: AtomicBool::new(false),
     });
     runtime.store.lock().await.export()?;
@@ -77,14 +79,19 @@ pub async fn run(config: Config) -> Result<()> {
             }
         };
         waiting_for_chromium = false;
+        let ready_file = config.output.join("collector.ready");
+        remove_ready_file(&ready_file).await;
         runtime
             .unavailable_source_reported
             .store(false, Ordering::Relaxed);
-        if let Err(error) = collect_connection(&endpoint, config.mode, runtime.clone()).await {
+        if let Err(error) =
+            collect_connection(&endpoint, &ready_file, config.mode, runtime.clone()).await
+        {
             if !is_connection_transition(&error) {
                 eprintln!("CDP collection failed: {error:#}");
             }
         }
+        remove_ready_file(&ready_file).await;
         runtime.targets.write().await.clear();
         runtime.network_scripts.lock().await.clear();
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -106,7 +113,12 @@ async fn endpoint_from_file(path: &Path) -> Result<String> {
     Ok(format!("ws://127.0.0.1:{port}{socket}"))
 }
 
-async fn collect_connection(endpoint: &str, mode: Mode, runtime: Arc<Runtime>) -> Result<()> {
+async fn collect_connection(
+    endpoint: &str,
+    ready_file: &Path,
+    mode: Mode,
+    runtime: Arc<Runtime>,
+) -> Result<()> {
     let client = Client::connect(endpoint).await?;
     let mut events = client.subscribe();
     client
@@ -116,6 +128,9 @@ async fn collect_connection(endpoint: &str, mode: Mode, runtime: Arc<Runtime>) -
             None,
         )
         .await?;
+    tokio::fs::write(ready_file, endpoint)
+        .await
+        .with_context(|| format!("cannot write {}", ready_file.display()))?;
 
     loop {
         let event = events.recv().await?;
@@ -198,6 +213,9 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                 return;
             }
             tokio::spawn(async move {
+                let Ok(permit) = runtime.source_retrievals.acquire().await else {
+                    return;
+                };
                 let result = client
                     .call(
                         "Debugger.getScriptSource",
@@ -205,6 +223,7 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                         Some(&session),
                     )
                     .await;
+                drop(permit);
                 match result.and_then(|value| {
                     value["scriptSource"]
                         .as_str()
@@ -259,6 +278,9 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                 return;
             };
             tokio::spawn(async move {
+                let Ok(permit) = runtime.source_retrievals.acquire().await else {
+                    return;
+                };
                 let result = client
                     .call(
                         "Network.getResponseBody",
@@ -266,6 +288,7 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                         Some(&session),
                     )
                     .await;
+                drop(permit);
                 match result.and_then(decode_body) {
                     Ok(source) => process(runtime, source, script_url, page_url).await,
                     Err(error) if source_unavailable(&error) => {
@@ -456,7 +479,18 @@ async fn process(runtime: Arc<Runtime>, source: String, script_url: String, page
         return;
     };
     let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
-    let result = tokio::task::block_in_place(|| runtime.analyzer.analyze(&source));
+    let result = match runtime.analyzer.analyze(&source).await {
+        Ok(result) => result,
+        Err(error) => {
+            eprintln!("Cannot analyze script {hash}: {error:#}");
+            crate::AnalyzeResult {
+                findings: Vec::new(),
+                structural_hash: String::new(),
+                library: None,
+                analysis_error: Some(error.to_string()),
+            }
+        }
+    };
     let mut store = runtime.store.lock().await;
     match store.save(CapturedScript {
         hash: &hash,
@@ -516,6 +550,14 @@ fn is_connection_transition(error: &anyhow::Error) -> bool {
             )
         })
     })
+}
+
+async fn remove_ready_file(path: &Path) {
+    if let Err(error) = tokio::fs::remove_file(path).await {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("Cannot remove {}: {error}", path.display());
+        }
+    }
 }
 
 fn decode_body(value: Value) -> Result<String> {

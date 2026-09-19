@@ -412,6 +412,21 @@ fn ignores_assignment_of_undefined_to_location() {
 }
 
 #[test]
+fn ignores_src_assignment_of_negated_boolean() {
+    assert_eq!(count_detector("e.src = !1", D), 0);
+    assert_eq!(count_detector("e.src = !userControlled", D), 0);
+}
+
+#[test]
+fn ignores_src_assignment_of_variable_holding_negated_boolean() {
+    let code = r#"
+        const disabled = !1;
+        e.src = disabled;
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
 fn ignores_src_assignment_on_new_image_in_sequence_expression() {
     let code = r#"
         this.image = new Image(), this.image.src = o.localSrc;

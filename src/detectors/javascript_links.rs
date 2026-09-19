@@ -298,6 +298,9 @@ fn is_guaranteed_not_javascript_scheme<'a>(
     }
 
     let resolved = resolve_identifier(ctx, expr, scope_id);
+    if matches!(resolved, Expression::UnaryExpression(_)) {
+        return true;
+    }
     if !std::ptr::eq(resolved, expr)
         && is_guaranteed_not_javascript_scheme(ctx, resolved, scope_id, visited)
     {

@@ -8,6 +8,7 @@ pub mod detectors;
 pub mod inference;
 pub mod store;
 pub mod utils;
+pub mod worker;
 
 pub use analyze::{analyze, AnalyzeResult, Analyzer, Finding, FindingCategory, LibraryCheck};
 pub use ctx::{AnalysisCtx, Category, RawMatch};

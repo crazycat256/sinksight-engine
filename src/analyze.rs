@@ -1,11 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::*;
 use oxc_ast::AstKind;
 use oxc_ast_visit::{walk, Visit};
-use oxc_codegen::{Codegen, CodegenOptions};
 use oxc_parser::{ParseOptions, Parser};
 use oxc_semantic::SemanticBuilder;
 use oxc_span::{SourceType, Span};
@@ -29,11 +28,13 @@ impl Analyzer {
     }
 
     pub fn analyze(&self, source: &str) -> AnalyzeResult {
-        analyze_with_handle(source, self.library_db.as_ref().map(LoadedDb::handle))
+        stacker::grow(64 * 1024 * 1024, || {
+            analyze_with_handle(source, self.library_db.as_ref().map(LoadedDb::handle))
+        })
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Finding {
     pub detector_name: String,
@@ -45,7 +46,7 @@ pub struct Finding {
     pub snippet: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FindingCategory {
     Sink,
@@ -61,30 +62,31 @@ impl From<Category> for FindingCategory {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AnalyzeResult {
     pub findings: Vec<Finding>,
     pub structural_hash: String,
-    pub pretty_content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub library: Option<LibraryCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryCheck {
     pub whole_file: Vec<LibraryMatchJson>,
     pub functions: Vec<FunctionMatchJson>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LibraryMatchJson {
     pub lib: String,
     pub version: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FunctionMatchJson {
     pub libs: Vec<LibraryMatchJson>,
@@ -178,17 +180,13 @@ fn analyze_with_handle(source: &str, library_db: Option<u32>) -> AnalyzeResult {
         .with_options(options)
         .parse();
 
+    let mut analysis_errors: Vec<String> =
+        parser_ret.errors.iter().map(ToString::to_string).collect();
+
     let structural_hash = structural_hash_of(&parser_ret.program);
 
-    let pretty_content = Codegen::new()
-        .with_options(CodegenOptions {
-            minify: false,
-            ..CodegenOptions::default()
-        })
-        .build(&parser_ret.program)
-        .code;
-
     let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
+    analysis_errors.extend(semantic_ret.errors.iter().map(ToString::to_string));
     let ctx = AnalysisCtx::new(source, &semantic_ret.semantic, &allocator);
     let raw_matches = detect_all(&ctx);
 
@@ -200,19 +198,33 @@ fn analyze_with_handle(source: &str, library_db: Option<u32>) -> AnalyzeResult {
 
     let library = library_db.map(|handle| LibraryCheck::from(&check_script(handle, source)));
 
-    if library
-        .as_ref()
-        .is_some_and(|lib| !lib.whole_file.is_empty())
-    {
-        findings.clear();
+    if let Some(library) = &library {
+        if !library.whole_file.is_empty() {
+            findings.clear();
+        } else if !library.functions.is_empty() {
+            findings.retain(|finding| {
+                !library
+                    .functions
+                    .iter()
+                    .any(|function| function_contains_finding(function, finding))
+            });
+        }
     }
 
     AnalyzeResult {
         findings,
         structural_hash,
-        pretty_content,
         library,
+        analysis_error: (!analysis_errors.is_empty()).then(|| analysis_errors.join("\n")),
     }
+}
+
+fn function_contains_finding(function: &FunctionMatchJson, finding: &Finding) -> bool {
+    let function_start = (function.start_line, function.start_column);
+    let function_end = (function.end_line, function.end_column);
+    let finding_start = (finding.start_line, finding.start_column);
+    let finding_end = (finding.end_line, finding.end_column);
+    finding_start >= function_start && finding_end <= function_end
 }
 
 fn raw_match_to_finding(source: &str, line_index: &LineIndex, m: RawMatch) -> Finding {
@@ -236,11 +248,7 @@ fn snippet_from_span(source: &str, span: Span) -> String {
     }
     let slice = &source[start..end];
     let compact: String = slice.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.len() > MAX_SNIPPET {
-        compact[..MAX_SNIPPET].to_string()
-    } else {
-        compact
-    }
+    compact.chars().take(MAX_SNIPPET).collect()
 }
 
 fn structural_hash_of(program: &Program<'_>) -> String {
