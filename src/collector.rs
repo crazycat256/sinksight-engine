@@ -40,10 +40,58 @@ struct Target {
     url: String,
 }
 
+/// Script requests waiting for their body, keyed by `(session, request)`.
+///
+/// An entry is normally removed by `Network.loadingFinished`/`loadingFailed`,
+/// but those events can be missed when the event stream lags or when a target
+/// goes away without detaching, so the oldest entries are evicted once the map
+/// grows past a bound rather than being kept for the life of the connection.
+#[derive(Default)]
+struct PendingBodies {
+    entries: HashMap<(String, String), (String, String, u64)>,
+    inserted: u64,
+}
+
+const MAX_PENDING_BODIES: usize = 4096;
+
+impl PendingBodies {
+    fn insert(&mut self, key: (String, String), script_url: String, page_url: String) {
+        self.entries
+            .insert(key, (script_url, page_url, self.inserted));
+        self.inserted += 1;
+        while self.entries.len() > MAX_PENDING_BODIES {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, _, seq))| *seq)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+    }
+
+    fn remove(&mut self, key: &(String, String)) -> Option<(String, String)> {
+        self.entries
+            .remove(key)
+            .map(|(script_url, page_url, _)| (script_url, page_url))
+    }
+
+    fn retain_sessions_other_than(&mut self, session: &str) {
+        self.entries
+            .retain(|(target_session, _), _| target_session != session);
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
+
 struct Runtime {
     store: Mutex<Store>,
     targets: RwLock<HashMap<String, Target>>,
-    network_scripts: Mutex<HashMap<(String, String), (String, String)>>,
+    network_scripts: Mutex<PendingBodies>,
     analyzer: Pool,
     max_script_bytes: usize,
     semaphore: Semaphore,
@@ -57,7 +105,7 @@ pub async fn run(config: Config) -> Result<()> {
     let runtime = Arc::new(Runtime {
         store: Mutex::new(Store::open(&config.output)?),
         targets: RwLock::new(HashMap::new()),
-        network_scripts: Mutex::new(HashMap::new()),
+        network_scripts: Mutex::new(PendingBodies::default()),
         analyzer,
         max_script_bytes: config.max_script_bytes,
         semaphore: Semaphore::new(concurrency),
@@ -186,7 +234,7 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                     .network_scripts
                     .lock()
                     .await
-                    .retain(|(target_session, _), _| target_session != &session);
+                    .retain_sessions_other_than(&session);
             }
         }
         "Page.frameNavigated" => {
@@ -271,7 +319,7 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                 .network_scripts
                 .lock()
                 .await
-                .insert((session, request_id), (url, page));
+                .insert((session, request_id), url, page);
         }
         "Network.loadingFinished" => {
             let Some(session) = event.session_id else {
