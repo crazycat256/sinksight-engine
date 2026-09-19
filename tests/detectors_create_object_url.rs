@@ -27,6 +27,15 @@ fn detects_dynamic_blob_and_text_html_type() {
 }
 
 #[test]
+fn detects_dynamic_blob_and_escaped_template_literal_type() {
+    let code = r#"
+        const blob = new Blob([getUserInput()], { type: `text/\u0068tml` });
+        URL.createObjectURL(blob);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
 fn detects_dynamic_blob_and_image_svg_xml_type() {
     let code = r#"
         const blob = new Blob([getUserInput()], { type: "image/svg+xml" });

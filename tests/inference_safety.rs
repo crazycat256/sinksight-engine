@@ -344,6 +344,26 @@ fn safe_string_of_new_date() {
     assert_safe("String(new Date())");
 }
 
+// Built-in semantics only apply while the name still refers to the global
+
+#[test]
+fn unsafe_locally_redefined_encoding_function() {
+    assert_unsafe("function escape(s) { return s; } escape(userInput)");
+    assert_unsafe("const encodeURIComponent = (s) => s; encodeURIComponent(userInput)");
+}
+
+#[test]
+fn unsafe_locally_redefined_number_conversion() {
+    assert_unsafe("function parseInt(s) { return s; } parseInt(userInput)");
+    assert_unsafe("function String(s) { return s; } String(userInput)");
+}
+
+#[test]
+fn unsafe_locally_redefined_static_method_owner() {
+    assert_unsafe("const JSON = { stringify: (x) => x }; JSON.stringify(userInput)");
+    assert_unsafe("const Math = { floor: (x) => x }; Math.floor(userInput)");
+}
+
 #[test]
 fn unsafe_string_of_unknown() {
     assert_unsafe("String(userInput)");
@@ -422,6 +442,28 @@ fn unsafe_new_regexp_user_input_to_string() {
 #[test]
 fn unsafe_unknown_to_string() {
     assert_unsafe("unknownObj.toString()");
+}
+
+#[test]
+fn unsafe_error_built_from_user_input_to_string() {
+    assert_unsafe("new Error(userInput).toString()");
+    assert_unsafe("String(new Error(userInput))");
+    assert_unsafe("'' + new Error(userInput)");
+}
+
+#[test]
+fn unsafe_url_built_from_user_input_to_string() {
+    // A URL keeps an opaque path verbatim, so `javascript:`- or `data:`-style
+    // payloads survive the round trip through the parser.
+    assert_unsafe("new URL(userInput).toString()");
+    assert_unsafe("String(new URL(userInput))");
+    assert_unsafe("new URL(userInput).toJSON()");
+}
+
+#[test]
+fn unsafe_symbol_description_built_from_user_input() {
+    assert_unsafe("String(Symbol(userInput))");
+    assert_unsafe("String(Symbol.for(userInput))");
 }
 
 // Static methods (Math, JSON, Date)

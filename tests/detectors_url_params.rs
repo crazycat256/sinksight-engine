@@ -38,6 +38,32 @@ fn ignores_new_url_search_params_with_static_string() {
 }
 
 #[test]
+fn ignores_new_url_search_params_with_a_record_argument() {
+    assert_eq!(
+        count_detector("const p = new URLSearchParams({ a: 1, b: 2 });", D),
+        0
+    );
+}
+
+#[test]
+fn ignores_new_url_search_params_with_a_constant_string_variable() {
+    let code = r#"
+        const defaults = "a=1&b=2";
+        const p = new URLSearchParams(defaults);
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
+fn detects_new_url_search_params_with_a_variable_holding_the_page_query() {
+    let code = r#"
+        const query = location.search;
+        const p = new URLSearchParams(query);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
 fn ignores_shadowed_url_search_params() {
     let code = r#"
         class URLSearchParams {}

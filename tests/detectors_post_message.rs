@@ -298,6 +298,53 @@ fn ignores_handler_with_logical_and_origin_check() {
     assert_eq!(count_detector(code, D), 0);
 }
 
+// Logging the origin is not checking it
+
+#[test]
+fn detects_handler_that_only_logs_the_event_origin() {
+    let code = r#"
+        window.addEventListener("message", function(event) {
+            console.log("message from", event.origin);
+            document.body.innerHTML = event.data;
+        });
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_handler_that_only_logs_the_origin_through_another_console_method() {
+    let code = r#"
+        window.addEventListener("message", function(event) {
+            console.warn("origin", event.origin);
+            eval(event.data);
+        });
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn ignores_handler_that_logs_the_origin_and_also_checks_it() {
+    let code = r#"
+        window.addEventListener("message", function(event) {
+            console.log("message from", event.origin);
+            if (event.origin !== "https://trusted.com") return;
+            document.body.innerHTML = event.data;
+        });
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
+fn ignores_handler_that_passes_the_origin_to_a_non_console_validator() {
+    let code = r#"
+        window.addEventListener("message", function(event) {
+            if (!isTrusted(event.origin)) return;
+            document.body.innerHTML = event.data;
+        });
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
 // Destructured event parameter
 
 #[test]

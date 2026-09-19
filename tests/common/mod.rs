@@ -122,9 +122,10 @@ fn scope_id_for_expression_statement(ctx: &AnalysisCtx, span: oxc_span::Span) ->
 /// `f` the analysis ctx, the enclosing expression that reference is part of,
 /// and the scope active at that point.
 ///
-/// Oxc separates declarations
-/// (`BindingIdentifier`) from usages (`IdentifierReference`) into distinct
-/// node kinds, so no such filtering is needed here.
+/// Oxc separates declarations (`BindingIdentifier`) from usages
+/// (`IdentifierReference`) into distinct node kinds, but the target of an
+/// assignment is an `IdentifierReference` too, so write-only references are
+/// filtered out explicitly.
 ///
 /// Only the small set of parent shapes exercised by these tests
 /// (bare `x;` expression statements and `var y = x;` declarators) are
@@ -139,7 +140,11 @@ pub fn with_identifier_usage<R>(
         let mut target: Option<(oxc_span::Span, ScopeId)> = None;
         for node in nodes.iter() {
             if let AstKind::IdentifierReference(ident) = node.kind() {
-                if ident.name.as_str() == var_name {
+                let is_read = ident
+                    .reference_id
+                    .get()
+                    .is_some_and(|rid| ctx.semantic.scoping().get_reference(rid).is_read());
+                if ident.name.as_str() == var_name && is_read {
                     target = Some((ident.span, node.scope_id()));
                     break;
                 }

@@ -20,6 +20,26 @@ fn assert_unsafe(code: &str) {
     });
 }
 
+/// Same as [`assert_safe`] for a use that is not the last top-level statement,
+/// typically one nested inside a loop or a catch clause.
+fn assert_use_safe(code: &str, var_name: &str) {
+    with_identifier_usage(code, var_name, |ctx, expr, scope_id| {
+        assert!(
+            is_safe_expression(ctx, expr, scope_id),
+            "expected use of `{var_name}` to be safe: {code:?}"
+        );
+    });
+}
+
+fn assert_use_unsafe(code: &str, var_name: &str) {
+    with_identifier_usage(code, var_name, |ctx, expr, scope_id| {
+        assert!(
+            !is_safe_expression(ctx, expr, scope_id),
+            "expected use of `{var_name}` to be unsafe: {code:?}"
+        );
+    });
+}
+
 // Sequential writes
 
 #[test]
@@ -721,6 +741,119 @@ fn labeled_continue_reenters_after_safe_write_then_breaks() {
     assert_safe(code);
 }
 
+#[test]
+fn for_of_variable_inherits_the_taint_of_the_iterable() {
+    let code = r#"
+        for (const part of location.hash.split("&")) {
+            part;
+        }
+    "#;
+    assert_use_unsafe(code, "part");
+}
+
+#[test]
+fn for_of_variable_over_a_literal_array_stays_safe() {
+    let code = r#"
+        for (const part of ["a", "b"]) {
+            part;
+        }
+    "#;
+    assert_use_safe(code, "part");
+}
+
+#[test]
+fn for_in_variable_inherits_the_taint_of_the_object() {
+    let code = r#"
+        for (const key in getUserInput()) {
+            key;
+        }
+    "#;
+    assert_use_unsafe(code, "key");
+}
+
+#[test]
+fn rebound_for_of_variable_does_not_carry_the_previous_iteration() {
+    let code = r#"
+        for (let part of ["a", "b"]) {
+            part;
+            part = getUserInput();
+        }
+    "#;
+    assert_use_safe(code, "part");
+}
+
+#[test]
+fn while_body_write_reaches_an_earlier_use_on_the_next_iteration() {
+    let code = r#"
+        let a = "safe";
+        while (condition) {
+            a;
+            a = getUserInput();
+        }
+    "#;
+    assert_use_unsafe(code, "a");
+}
+
+#[test]
+fn for_body_write_reaches_an_earlier_use_on_the_next_iteration() {
+    let code = r#"
+        let a = "safe";
+        for (let i = 0; i < 2; i++) {
+            a;
+            a = getUserInput();
+        }
+    "#;
+    assert_use_unsafe(code, "a");
+}
+
+#[test]
+fn do_while_body_write_reaches_an_earlier_use_on_the_next_iteration() {
+    let code = r#"
+        let a = "safe";
+        do {
+            a;
+            a = getUserInput();
+        } while (condition);
+    "#;
+    assert_use_unsafe(code, "a");
+}
+
+#[test]
+fn for_of_body_write_reaches_an_earlier_use_on_the_next_iteration() {
+    let code = r#"
+        let a = "safe";
+        for (const part of ["a", "b"]) {
+            a;
+            a = getUserInput();
+        }
+    "#;
+    assert_use_unsafe(code, "a");
+}
+
+#[test]
+fn for_update_write_reaches_an_earlier_body_use_on_the_next_iteration() {
+    let code = r#"
+        let a = "safe";
+        for (let i = 0; i < 2; i = getUserInput()) {
+            a;
+            a = i;
+        }
+    "#;
+    assert_use_unsafe(code, "a");
+}
+
+#[test]
+fn loop_body_that_only_writes_safe_values_keeps_the_use_safe() {
+    let code = r#"
+        let a = "safe";
+        while (condition) {
+            a;
+            a = "still safe";
+        }
+    "#;
+    assert_use_safe(code, "a");
+}
+
 // Switch
 
 #[test]
@@ -970,6 +1103,49 @@ fn use_after_try_that_always_returns_is_unreachable() {
         a;
     "#;
     assert_unsafe(code);
+}
+
+#[test]
+fn catch_sees_a_value_written_midway_through_the_try_block() {
+    let code = r#"
+        let a = "safe";
+        try {
+            a = getUserInput();
+            mayThrow();
+            a = "safe again";
+        } catch (e) {
+            a;
+        }
+    "#;
+    assert_use_unsafe(code, "a");
+}
+
+#[test]
+fn catch_stays_safe_when_the_try_block_never_writes_an_unsafe_value() {
+    let code = r#"
+        let a = "safe";
+        try {
+            mayThrow();
+        } catch (e) {
+            a;
+        }
+    "#;
+    assert_use_safe(code, "a");
+}
+
+#[test]
+fn finally_sees_a_value_written_midway_through_the_try_block() {
+    let code = r#"
+        let a = "safe";
+        try {
+            a = getUserInput();
+            mayThrow();
+            a = "safe again";
+        } finally {
+            a;
+        }
+    "#;
+    assert_use_unsafe(code, "a");
 }
 
 // IIFE
