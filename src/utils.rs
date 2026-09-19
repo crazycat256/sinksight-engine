@@ -187,6 +187,17 @@ pub fn is_window_like<'a>(ctx: &AnalysisCtx<'a>, expr: &Expression<'a>, scope_id
     }
 }
 
+/// Checks that `name` still refers to the global of that name, i.e. that no
+/// binding visible from `scope_id` shadows it. Built-in semantics (a safe
+/// `encodeURIComponent`, a numeric `Math.floor`) may only be assumed for
+/// names that are not redefined by the script.
+pub fn is_unshadowed_global(ctx: &AnalysisCtx, name: &str, scope_id: ScopeId) -> bool {
+    ctx.semantic
+        .scoping()
+        .find_binding(scope_id, name)
+        .is_none()
+}
+
 const LOCATION_PROPS: &[&str] = &["search", "hash", "href", "pathname"];
 const DOCUMENT_URL_PROPS: &[&str] = &["URL", "documentURI", "baseURI"];
 

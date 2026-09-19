@@ -6,7 +6,7 @@ use oxc_span::GetSpan;
 
 use crate::ctx::AnalysisCtx;
 use crate::ctx::ScopeId;
-use crate::utils::resolve_identifier;
+use crate::utils::{is_unshadowed_global, resolve_identifier};
 
 use super::elements::infer_element_type;
 use super::method_registry::{
@@ -213,11 +213,13 @@ fn infer_call_type<'a>(
     let callee = &call.callee;
 
     if let Expression::Identifier(ident) = callee {
-        if ident.name == "Date" {
-            return InferredType::STRING;
-        }
-        if let Some(desc) = get_global_function(ident.name.as_str()) {
-            return desc.return_type.clone();
+        if is_unshadowed_global(ctx, ident.name.as_str(), scope_id) {
+            if ident.name == "Date" {
+                return InferredType::STRING;
+            }
+            if let Some(desc) = get_global_function(ident.name.as_str()) {
+                return desc.return_type.clone();
+            }
         }
     }
 
@@ -229,8 +231,10 @@ fn infer_call_type<'a>(
             let obj = member.object();
 
             if let Expression::Identifier(obj_ident) = obj {
-                if let Some(desc) = get_static_method(obj_ident.name.as_str(), method_name) {
-                    return desc.return_type.clone();
+                if is_unshadowed_global(ctx, obj_ident.name.as_str(), scope_id) {
+                    if let Some(desc) = get_static_method(obj_ident.name.as_str(), method_name) {
+                        return desc.return_type.clone();
+                    }
                 }
             }
 

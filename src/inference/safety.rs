@@ -13,7 +13,7 @@ use oxc_ast::AstKind;
 use crate::ctx::{AnalysisCtx, ScopeId};
 use crate::inference::types::{is_safe_to_stringify, SafetyBehavior};
 use crate::utils::{
-    declarator_init, is_const_variable_binding, is_parameter_binding,
+    declarator_init, is_const_variable_binding, is_parameter_binding, is_unshadowed_global,
     is_variable_declarator_binding, resolve_identifier, resolve_iife_param,
     resolve_named_function_param, unwrap_expression,
 };
@@ -267,6 +267,9 @@ fn is_call_safe<'a>(
     let callee = &call.callee;
 
     if let Expression::Identifier(ident) = callee {
+        if !is_unshadowed_global(ctx, ident.name.as_str(), scope_id) {
+            return false;
+        }
         return is_global_call_safe(ctx, ident.name.as_str(), call, scope_id, visited);
     }
 
@@ -394,8 +397,10 @@ fn is_method_call_safe<'a>(
     // well-known global, not a value we need to safety-check — only the
     // arguments matter.
     if let Expression::Identifier(obj_ident) = obj {
-        if let Some(desc) = get_static_method(obj_ident.name.as_str(), prop) {
-            return evaluate_static_method_safety(ctx, desc.safety, call, scope_id, visited);
+        if is_unshadowed_global(ctx, obj_ident.name.as_str(), scope_id) {
+            if let Some(desc) = get_static_method(obj_ident.name.as_str(), prop) {
+                return evaluate_static_method_safety(ctx, desc.safety, call, scope_id, visited);
+            }
         }
     }
 
