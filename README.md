@@ -50,3 +50,8 @@ Pamphagos only needs to start this binary next to the browser, point it at the
 browser profile's `DevToolsActivePort`, and expose the output directory in the
 agent workspace. SinkSight does not own Chromium and does not add an HTTP
 service or an operator UI.
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 or later.
+See [LICENSE](LICENSE) for the full terms.

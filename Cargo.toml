@@ -2,7 +2,7 @@
 name = "sinksight-engine"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0-or-later"
 description = "Continuous DOM XSS analysis for JavaScript observed through Chrome DevTools Protocol."
 repository = "https://github.com/crazycat256/sinksight-engine"
 
