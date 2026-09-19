@@ -1,6 +1,8 @@
 mod common;
 use common::with_last_expr;
-use sinksight_engine::inference::{infer_element_type, is_dangerous_attribute};
+use sinksight_engine::inference::{
+    attribute_sink_kind, infer_element_type, is_dangerous_attribute, AttributeSinkKind,
+};
 
 fn assert_element_type(code: &str, expected: Option<&str>) {
     with_last_expr(code, |ctx, expr, scope_id| {
@@ -300,4 +302,52 @@ fn null_element_conservatively_flags_known_dangerous_attrs() {
 fn null_element_does_not_flag_clearly_safe_attrs() {
     assert!(!is_dangerous_attribute(None, "class"));
     assert!(!is_dangerous_attribute(None, "id"));
+}
+
+#[test]
+fn xlink_href_is_canonicalized_to_href() {
+    assert!(is_dangerous_attribute(Some("a"), "xlink:href"));
+    assert!(!is_dangerous_attribute(Some("div"), "xlink:href"));
+}
+
+#[test]
+fn attribute_sink_kind_splits_javascript_html_and_resource() {
+    assert_eq!(
+        attribute_sink_kind(Some("a"), "href"),
+        Some(AttributeSinkKind::JavascriptUri)
+    );
+    assert_eq!(
+        attribute_sink_kind(Some("form"), "action"),
+        Some(AttributeSinkKind::JavascriptUri)
+    );
+    assert_eq!(
+        attribute_sink_kind(Some("iframe"), "src"),
+        Some(AttributeSinkKind::JavascriptUri)
+    );
+    assert_eq!(
+        attribute_sink_kind(Some("script"), "src"),
+        Some(AttributeSinkKind::ResourceUrl)
+    );
+    assert_eq!(
+        attribute_sink_kind(Some("object"), "data"),
+        Some(AttributeSinkKind::ResourceUrl)
+    );
+    assert_eq!(attribute_sink_kind(None, "data"), None);
+    assert_eq!(attribute_sink_kind(Some("div"), "data"), None);
+    assert_eq!(
+        attribute_sink_kind(None, "src"),
+        Some(AttributeSinkKind::ResourceUrl)
+    );
+    assert_eq!(
+        attribute_sink_kind(Some("iframe"), "srcdoc"),
+        Some(AttributeSinkKind::HtmlInjection)
+    );
+    assert_eq!(
+        attribute_sink_kind(Some("div"), "onclick"),
+        Some(AttributeSinkKind::HtmlInjection)
+    );
+    assert_eq!(attribute_sink_kind(Some("a"), "ping"), None);
+    assert_eq!(attribute_sink_kind(Some("img"), "src"), None);
+    assert_eq!(attribute_sink_kind(Some("video"), "src"), None);
+    assert_eq!(attribute_sink_kind(Some("div"), "href"), None);
 }

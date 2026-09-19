@@ -8,16 +8,18 @@ pub mod function_constructor;
 pub mod insert_adjacent_html;
 pub mod javascript_links;
 pub mod post_message;
+pub mod resource_url;
 pub mod unsafe_html;
 pub mod unsafe_timers;
 pub mod url_params;
 pub mod window_name;
 
-use oxc_ast::ast::Expression;
+use oxc_ast::ast::{AssignmentTarget, CallExpression, Expression};
 use oxc_ast::AstKind;
 use oxc_span::Span;
 
 use crate::ctx::{AnalysisCtx, RawMatch};
+use crate::utils::{assignment_target_object, assignment_target_property_name};
 
 /// Walks every node recorded by semantic analysis and runs each detector
 /// against the node kinds it's interested in, collecting all findings.
@@ -30,6 +32,7 @@ pub fn detect_all<'a>(ctx: &AnalysisCtx<'a>) -> Vec<RawMatch> {
             AstKind::AssignmentExpression(expr) => {
                 unsafe_html::check(ctx, expr, scope_id, &mut out);
                 javascript_links::check_assignment(ctx, expr, scope_id, &mut out);
+                resource_url::check_assignment(ctx, expr, scope_id, &mut out);
                 post_message::check_assignment(ctx, expr, scope_id, &mut out);
             }
             AstKind::CallExpression(expr) => {
@@ -39,6 +42,8 @@ pub fn detect_all<'a>(ctx: &AnalysisCtx<'a>) -> Vec<RawMatch> {
                 function_constructor::check_call(ctx, expr, scope_id, &mut out);
                 unsafe_timers::check(ctx, expr, scope_id, &mut out);
                 javascript_links::check_call(ctx, expr, scope_id, &mut out);
+                resource_url::check_call(ctx, expr, scope_id, &mut out);
+                unsafe_html::check_call(ctx, expr, scope_id, &mut out);
                 create_object_url::check(ctx, expr, scope_id, &mut out);
                 post_message::check_call(ctx, expr, scope_id, &mut out);
             }
@@ -75,6 +80,68 @@ pub(crate) fn member_parts<'a>(kind: AstKind<'a>) -> Option<(&'a str, &'a Expres
             Some((name.as_str(), &m.object, m.span))
         }
         _ => None,
+    }
+}
+
+/// `el.setAttribute(name, value)` / `el.setAttributeNS(ns, name, value)`
+/// when `name` is a string literal.
+pub(crate) fn set_attribute_write<'a>(
+    call: &'a CallExpression<'a>,
+) -> Option<(&'a Expression<'a>, &'a str, &'a Expression<'a>)> {
+    let member = call.callee.get_member_expr()?;
+    let method = member.static_property_name()?;
+    let object = member.object();
+    match method {
+        "setAttribute" => {
+            let Expression::StringLiteral(name) = call.arguments.first()?.as_expression()? else {
+                return None;
+            };
+            let value = call.arguments.get(1)?.as_expression()?;
+            Some((object, name.value.as_str(), value))
+        }
+        "setAttributeNS" => {
+            let Expression::StringLiteral(name) = call.arguments.get(1)?.as_expression()? else {
+                return None;
+            };
+            let value = call.arguments.get(2)?.as_expression()?;
+            Some((object, name.value.as_str(), value))
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn is_self_property_assignment(left: &AssignmentTarget, right: &Expression) -> bool {
+    if let AssignmentTarget::AssignmentTargetIdentifier(l) = left {
+        return matches!(right, Expression::Identifier(r) if l.name == r.name);
+    }
+
+    let Some(left_prop) = assignment_target_property_name(left) else {
+        return false;
+    };
+    let Some(left_obj) = assignment_target_object(left) else {
+        return false;
+    };
+    let Some(right_member) = right.get_member_expr() else {
+        return false;
+    };
+    let Some(right_prop) = right_member.static_property_name() else {
+        return false;
+    };
+
+    left_prop == right_prop && expr_equivalent(left_obj, right_member.object())
+}
+
+fn expr_equivalent(a: &Expression, b: &Expression) -> bool {
+    match (a, b) {
+        (Expression::Identifier(x), Expression::Identifier(y)) => x.name == y.name,
+        (Expression::ThisExpression(_), Expression::ThisExpression(_)) => true,
+        _ => match (a.get_member_expr(), b.get_member_expr()) {
+            (Some(ma), Some(mb)) => match (ma.static_property_name(), mb.static_property_name()) {
+                (Some(pa), Some(pb)) => pa == pb && expr_equivalent(ma.object(), mb.object()),
+                _ => false,
+            },
+            _ => false,
+        },
     }
 }
 

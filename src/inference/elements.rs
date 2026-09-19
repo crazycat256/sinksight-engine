@@ -82,12 +82,32 @@ static ALL_DANGEROUS_ATTR_NAMES: LazyLock<HashSet<&'static str>> = LazyLock::new
         .collect()
 });
 
+/// How a dangerous attribute write can execute attacker-controlled data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttributeSinkKind {
+    /// Navigation / URL assignment that can become a `javascript:` URI.
+    JavascriptUri,
+    /// HTML or event-handler injection (`srcdoc`, `on*`).
+    HtmlInjection,
+    /// Loads an attacker-controlled resource (`script.src`, `object.data`).
+    ResourceUrl,
+}
+
+/// Normalizes IDL / SVG aliases to the HTML attribute names in the matrix.
+fn canonical_attribute_name(attribute_name: &str) -> String {
+    let lower = attribute_name.to_lowercase();
+    match lower.as_str() {
+        "xlink:href" => "href".to_owned(),
+        _ => lower,
+    }
+}
+
 /// Checks whether setting `attribute_name` to an arbitrary value is
 /// dangerous on the given element type. If `element_tag` is `None`, we
 /// cannot determine the element type, so we conservatively assume the worst
 /// case.
 pub fn is_dangerous_attribute(element_tag: Option<&str>, attribute_name: &str) -> bool {
-    let lower_attr = attribute_name.to_lowercase();
+    let lower_attr = canonical_attribute_name(attribute_name);
 
     if lower_attr.starts_with("on") {
         return true;
@@ -104,5 +124,43 @@ pub fn is_dangerous_attribute(element_tag: Option<&str>, attribute_name: &str) -
     {
         Some((_, tags)) => tags.contains(lower_tag.as_str()),
         None => false,
+    }
+}
+
+/// Classifies a DOM attribute write for detectors. `ping` is in the
+/// dangerous-attribute matrix but is not an XSS sink, so it is omitted here.
+pub fn attribute_sink_kind(
+    element_tag: Option<&str>,
+    attribute_name: &str,
+) -> Option<AttributeSinkKind> {
+    let attr = canonical_attribute_name(attribute_name);
+
+    if attr == "ping" {
+        return None;
+    }
+
+    if !is_dangerous_attribute(element_tag, &attr) {
+        return None;
+    }
+
+    if attr.starts_with("on") || attr == "srcdoc" {
+        return Some(AttributeSinkKind::HtmlInjection);
+    }
+
+    match attr.as_str() {
+        "href" | "action" | "formaction" => Some(AttributeSinkKind::JavascriptUri),
+        // `data` is only a resource sink on <object>. On an unknown receiver it is
+        // almost always a regular JS property (event.data, ajax data, etc.).
+        "data" => match element_tag.map(|tag| tag.to_ascii_lowercase()) {
+            Some(tag) if tag == "object" => Some(AttributeSinkKind::ResourceUrl),
+            _ => None,
+        },
+        "src" => match element_tag.map(|tag| tag.to_ascii_lowercase()) {
+            Some(tag) if tag == "iframe" || tag == "frame" => {
+                Some(AttributeSinkKind::JavascriptUri)
+            }
+            Some(_) | None => Some(AttributeSinkKind::ResourceUrl),
+        },
+        _ => None,
     }
 }

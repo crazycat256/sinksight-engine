@@ -52,11 +52,11 @@ const ANGULAR: Target = Target {
     expected_findings: &[
         ef!("functionConstructor", 253, 163),
         ef!("javascriptLinks", 51, 136),
-        ef!("javascriptLinks", 112, 67),
         ef!("javascriptLinks", 127, 311),
         ef!("javascriptLinks", 172, 494),
         ef!("javascriptLinks", 173, 14),
         ef!("javascriptLinks", 206, 337),
+        ef!("resourceUrl", 112, 67),
         ef!("unsafeHtml", 33, 283),
         ef!("unsafeHtml", 33, 435),
         ef!("unsafeHtml", 64, 38),
@@ -132,8 +132,8 @@ const PDF: Target = Target {
         ef!("javascriptLinks", 28, 35061),
         ef!("javascriptLinks", 28, 35211),
         ef!("javascriptLinks", 28, 35657),
-        ef!("javascriptLinks", 28, 71163),
         ef!("postMessage", 25, 124866),
+        ef!("resourceUrl", 28, 71163),
     ],
 };
 
@@ -142,7 +142,7 @@ const REACT_DOM: Target = Target {
     url: "https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js",
     sri: "sha256-IXWO0ITNDjfnNXIu5POVfqlgYoop36bDzhodR6LW5Pc=",
     expected_findings: &[
-        ef!("javascriptLinks", 181, 35),
+        ef!("resourceUrl", 181, 35),
         ef!("unsafeHtml", 220, 93),
         ef!("unsafeHtml", 220, 149),
     ],
@@ -152,7 +152,7 @@ const THREE: Target = Target {
     name: "three.core.js",
     url: "https://unpkg.com/three@0.183.1/build/three.core.js",
     sri: "sha256-an/INDeBhTTV4wzoyODOdiMMoiRURuokdEuz2IxDZYM=",
-    expected_findings: &[ef!("javascriptLinks", 44564, 2)],
+    expected_findings: &[ef!("resourceUrl", 44564, 2)],
 };
 
 const TYPESCRIPT: Target = Target {

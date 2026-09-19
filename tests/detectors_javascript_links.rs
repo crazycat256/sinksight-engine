@@ -364,6 +364,87 @@ fn detects_href_assignment_on_confirmed_anchor_element() {
 }
 
 #[test]
+fn detects_form_action_assignment() {
+    let code = r#"
+        const form = document.createElement("form");
+        form.action = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_form_action_set_attribute() {
+    let code = r#"
+        const form = document.createElement("form");
+        form.setAttribute("action", userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_button_form_action_idl_property() {
+    let code = r#"
+        const button = document.createElement("button");
+        button.formAction = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_iframe_src_as_javascript_uri_sink() {
+    let code = r#"
+        const frame = document.createElement("iframe");
+        frame.src = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn ignores_iframe_src_with_https_prefix() {
+    let code = r#"
+        const frame = document.createElement("iframe");
+        frame.src = "https://" + userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
+fn ignores_href_on_confirmed_div() {
+    let code = r#"
+        const el = document.createElement("div");
+        el.href = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
+fn ignores_src_on_confirmed_video() {
+    let code = r#"
+        const video = document.createElement("video");
+        video.src = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
+fn ignores_script_src_as_javascript_link() {
+    let code = r#"
+        const s = document.createElement("script");
+        s.src = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
+fn detects_xlink_href_set_attribute_ns() {
+    let code = r#"
+        const el = document.createElementNS("http://www.w3.org/2000/svg", "a");
+        el.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
 fn ignores_assignment_on_new_image_src_chained() {
     let code = r#"
         new Image().src = userInput;

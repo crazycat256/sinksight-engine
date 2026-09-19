@@ -359,8 +359,8 @@ fn handles_destructured_document_references_by_gracefully_failing_safe() {
         })(document, getUnknownUrl());
     "#;
     // Because destructuring parameters might not be statically tracked yet,
-    // it should probably fallback to reporting it as a match (because the tag is unknown).
-    assert_eq!(count_detector(code, "javascriptLinks"), 1);
+    // the tag is unknown and `src` is treated as a resource URL (worst case).
+    assert_eq!(count_detector(code, "resourceUrl"), 1);
 }
 
 #[test]

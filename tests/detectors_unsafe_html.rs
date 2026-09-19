@@ -191,3 +191,60 @@ fn ignores_inner_html_from_static_from_char_code() {
         0
     );
 }
+
+#[test]
+fn detects_iframe_srcdoc_assignment() {
+    let code = r#"
+        const iframe = document.createElement("iframe");
+        iframe.srcdoc = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn detects_set_attribute_srcdoc() {
+    let code = r#"
+        const iframe = document.createElement("iframe");
+        iframe.setAttribute("srcdoc", userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn ignores_set_attribute_srcdoc_on_div() {
+    let code = r#"
+        const el = document.createElement("div");
+        el.setAttribute("srcdoc", userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
+
+#[test]
+fn detects_set_attribute_onclick() {
+    assert_eq!(
+        count_detector(r#"el.setAttribute("onclick", userInput)"#, D),
+        1
+    );
+}
+
+#[test]
+fn detects_set_attribute_ns_onload() {
+    let code = r#"
+        el.setAttributeNS(null, "onload", userInput);
+    "#;
+    assert_eq!(count_detector(code, D), 1);
+}
+
+#[test]
+fn ignores_onclick_property_assignment() {
+    assert_eq!(count_detector("el.onclick = userInput", D), 0);
+}
+
+#[test]
+fn ignores_srcdoc_assignment_on_div() {
+    let code = r#"
+        const el = document.createElement("div");
+        el.srcdoc = userInput;
+    "#;
+    assert_eq!(count_detector(code, D), 0);
+}
