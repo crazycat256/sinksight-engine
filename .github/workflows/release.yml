@@ -1,32 +1,71 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
 permissions:
   contents: write
 
 jobs:
   linux-x86_64:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - uses: dtolnay/rust-toolchain@1.95.0
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --locked -p sinksight-cli
-      - name: Package binary
+      - name: Determine release version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          archive="sinksight-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz"
-          staging="sinksight-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu"
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "sinksight-cli") | .version')"
+          if [[ -z "$version" ]]; then
+            echo "Cannot find the sinksight-cli version" >&2
+            exit 1
+          fi
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Release $tag already exists"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.version.outputs.publish == 'true'
+        uses: Swatinem/rust-cache@v2
+      - if: steps.version.outputs.publish == 'true'
+        run: cargo build --release --locked -p sinksight-cli
+      - name: Package binary
+        if: steps.version.outputs.publish == 'true'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          archive="sinksight-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
+          staging="sinksight-${RELEASE_TAG}-x86_64-unknown-linux-gnu"
           mkdir "$staging"
           cp target/release/sinksight LICENSE README.md "$staging/"
           tar -czf "$archive" "$staging"
           sha256sum "$archive" > "$archive.sha256"
       - name: Publish release
+        if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes sinksight-*.tar.gz sinksight-*.sha256
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_COMMIT: ${{ github.event.workflow_run.head_sha }}
+        run: >-
+          gh release create "$RELEASE_TAG"
+          --target "$RELEASE_COMMIT"
+          --generate-notes
+          sinksight-*.tar.gz
+          sinksight-*.sha256
