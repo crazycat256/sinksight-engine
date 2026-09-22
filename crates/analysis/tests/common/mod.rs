@@ -9,8 +9,8 @@ use oxc_parser::{ParseOptions, Parser};
 use oxc_semantic::SemanticBuilder;
 use oxc_span::SourceType;
 
-use sinksight_engine::ctx::{Category, ScopeId};
-use sinksight_engine::{detect_all, AnalysisCtx};
+use sinksight_analysis::ctx::{Category, ScopeId};
+use sinksight_analysis::{detect_all, AnalysisCtx};
 
 /// Parses `source` (with the same parser options `analyze`/`detect_all` use),
 /// runs semantic analysis, builds an [`AnalysisCtx`], and hands both it and

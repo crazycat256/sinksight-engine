@@ -1,6 +1,6 @@
 mod common;
 use common::{category_for, count_detector, total_matches};
-use sinksight_engine::ctx::Category;
+use sinksight_analysis::ctx::Category;
 
 #[test]
 fn detects_unsafe_html_in_a_class_method_with_loops() {

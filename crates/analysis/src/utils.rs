@@ -137,7 +137,7 @@ pub fn matches_callee_names(callee: &Expression, targets: &[&str]) -> bool {
 
 /// Strips parentheses and TypeScript type-wrapper nodes.
 /// oxc is normally parsed with `preserve_parens: false` (see
-/// `sinksight_engine::parse`), so `ParenthesizedExpression` should not
+/// `sinksight_analysis::parse`), so `ParenthesizedExpression` should not
 /// appear in practice, but detectors may receive ASTs parsed elsewhere.
 pub fn unwrap_expression<'a>(expr: &'a Expression<'a>) -> &'a Expression<'a> {
     let mut current = expr;

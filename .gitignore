@@ -1,4 +1,4 @@
 /target
 **/*.rs.bk
 *.slhdb
-tests/fixtures/.cache/
+**/tests/fixtures/.cache/

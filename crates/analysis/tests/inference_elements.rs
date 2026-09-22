@@ -1,6 +1,6 @@
 mod common;
 use common::with_last_expr;
-use sinksight_engine::inference::{
+use sinksight_analysis::inference::{
     attribute_sink_kind, infer_element_type, is_dangerous_attribute, AttributeSinkKind,
 };
 

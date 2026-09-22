@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use sinksight_engine::collector::{self, Config, Mode};
-use sinksight_engine::worker::Pool;
+use clap::{Parser, Subcommand, ValueEnum};
+use sinksight_collector::collector::{self, Config, Mode};
+use sinksight_collector::worker::Pool;
 
 #[derive(Parser)]
 #[command(
@@ -23,8 +23,8 @@ enum Command {
         devtools_active_port: PathBuf,
         #[arg(long)]
         output: PathBuf,
-        #[arg(long, value_enum, default_value_t = Mode::Dynamic)]
-        mode: Mode,
+        #[arg(long, value_enum, default_value_t = ModeArgument::Dynamic)]
+        mode: ModeArgument,
         #[arg(long)]
         library_db: Option<PathBuf>,
         #[arg(long, default_value_t = 10 * 1024 * 1024)]
@@ -39,6 +39,21 @@ enum Command {
     },
     #[command(hide = true)]
     AnalysisWorker,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ModeArgument {
+    Dynamic,
+    Stealth,
+}
+
+impl From<ModeArgument> for Mode {
+    fn from(value: ModeArgument) -> Self {
+        match value {
+            ModeArgument::Dynamic => Self::Dynamic,
+            ModeArgument::Stealth => Self::Stealth,
+        }
+    }
 }
 
 #[tokio::main]
@@ -68,7 +83,7 @@ async fn main() -> Result<()> {
             let config = Config {
                 devtools_active_port,
                 output,
-                mode,
+                mode: mode.into(),
                 library_db: read_optional(library_db).await?,
                 max_script_bytes,
                 analysis_concurrency,
@@ -80,7 +95,7 @@ async fn main() -> Result<()> {
                 result = tokio::signal::ctrl_c() => result.context("cannot listen for Ctrl-C")?,
             }
         }
-        Command::AnalysisWorker => sinksight_engine::worker::serve().await?,
+        Command::AnalysisWorker => sinksight_collector::worker::serve().await?,
     }
     Ok(())
 }

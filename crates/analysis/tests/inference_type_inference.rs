@@ -1,6 +1,6 @@
 mod common;
 use common::with_last_expr;
-use sinksight_engine::inference::infer_type;
+use sinksight_analysis::inference::infer_type;
 
 fn assert_type(code: &str, expected: &str) {
     with_last_expr(code, |ctx, expr, scope_id| {

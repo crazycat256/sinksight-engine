@@ -9,7 +9,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use url::Url;
 
-use crate::AnalyzeResult;
+use sinksight_analysis::AnalyzeResult;
 
 pub struct CapturedScript<'a> {
     pub hash: &'a str,
@@ -93,7 +93,12 @@ impl Store {
     /// it. Returns `None` when the script is unknown, meaning the caller still
     /// has to analyze it and call [`Store::save`]. Otherwise returns whether
     /// this observation was new.
-    pub fn observe(&mut self, hash: &str, page_url: &str, script_url: &str) -> Result<Option<bool>> {
+    pub fn observe(
+        &mut self,
+        hash: &str,
+        page_url: &str,
+        script_url: &str,
+    ) -> Result<Option<bool>> {
         let known: Option<i64> = self
             .connection
             .query_row("SELECT 1 FROM scripts WHERE hash = ?1", [hash], |row| {

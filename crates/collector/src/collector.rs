@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
-use clap::ValueEnum;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast::error::RecvError;
@@ -16,7 +15,7 @@ use crate::cdp::{has_error_code, Client, Event};
 use crate::store::{CapturedScript, Store};
 use crate::worker::Pool;
 
-#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum Mode {
     #[default]
     Dynamic,
@@ -563,7 +562,7 @@ async fn process(runtime: Arc<Runtime>, source: String, script_url: String, page
         Ok(result) => result,
         Err(error) => {
             eprintln!("Cannot analyze script {hash}: {error:#}");
-            crate::AnalyzeResult {
+            sinksight_analysis::AnalyzeResult {
                 findings: Vec::new(),
                 structural_hash: String::new(),
                 library: None,

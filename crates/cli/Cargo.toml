@@ -1,0 +1,18 @@
+[package]
+name = "sinksight-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SinkSight command-line interface."
+
+[[bin]]
+name = "sinksight"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+sinksight-collector = { path = "../collector" }
+tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread", "signal"] }

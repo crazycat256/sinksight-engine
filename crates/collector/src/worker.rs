@@ -9,7 +9,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-use crate::{AnalyzeResult, Analyzer};
+use sinksight_analysis::{AnalyzeResult, Analyzer};
 
 const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_LIBRARY_BYTES: usize = 1024 * 1024 * 1024;

@@ -1261,26 +1261,47 @@ dependencies = [
 ]
 
 [[package]]
-name = "sinksight-engine"
+name = "sinksight-analysis"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "base64",
- "clap",
- "csv",
- "futures-util",
  "oxc_allocator",
  "oxc_ast",
  "oxc_ast_visit",
  "oxc_parser",
  "oxc_semantic",
  "oxc_span",
- "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "sinksight-library-hash",
  "stacker",
+ "tempfile",
+]
+
+[[package]]
+name = "sinksight-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "sinksight-collector",
+ "tokio",
+]
+
+[[package]]
+name = "sinksight-collector"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "csv",
+ "futures-util",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sinksight-analysis",
  "tempfile",
  "tokio",
  "tokio-tungstenite",

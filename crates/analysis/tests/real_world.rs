@@ -13,7 +13,7 @@ use std::process::Command;
 
 use sha2::{Digest, Sha256};
 
-use sinksight_engine::analyze;
+use sinksight_analysis::analyze;
 
 struct ExpectedFinding {
     detector: &'static str,

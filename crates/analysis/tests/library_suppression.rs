@@ -1,4 +1,4 @@
-use sinksight_engine::analyze;
+use sinksight_analysis::analyze;
 use sinksight_library_hash::{db, extract_hashes, parse_hash_bytes};
 
 fn library_db(source: &str) -> Vec<u8> {

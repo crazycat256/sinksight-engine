@@ -1,6 +1,6 @@
 mod common;
 use common::{with_identifier_usage, with_last_expr};
-use sinksight_engine::inference::{infer_type, is_safe_expression};
+use sinksight_analysis::inference::{infer_type, is_safe_expression};
 
 fn assert_safe(code: &str) {
     with_last_expr(code, |ctx, expr, scope_id| {

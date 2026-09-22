@@ -4,6 +4,16 @@ SinkSight Engine captures JavaScript from an existing Chromium session through
 the Chrome DevTools Protocol, analyzes it for DOM XSS inputs and sinks, and
 writes stable artifacts that an agent can read without speaking CDP.
 
+## Workspace
+
+- `sinksight-analysis` contains the platform-independent detection algorithm.
+- `sinksight-collector` contains CDP collection, persistence, and exports.
+- `sinksight-cli` produces the `sinksight` executable that combines both.
+
+Keeping these components in one workspace gives the analysis library a stable
+boundary for native and future WebAssembly consumers without coupling the
+collector to Pamphagos.
+
 ## Commands
 
 `collect` is the normal command. It performs collection, analysis, library
@@ -50,6 +60,10 @@ Pamphagos only needs to start this binary next to the browser, point it at the
 browser profile's `DevToolsActivePort`, and expose the output directory in the
 agent workspace. SinkSight does not own Chromium and does not add an HTTP
 service or an operator UI.
+
+Tagged releases contain a versioned Linux binary and a SHA-256 checksum.
+Consumers should pin both instead of downloading an artifact from a moving
+branch.
 
 ## License
 

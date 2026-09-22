@@ -299,9 +299,9 @@ fn expr_references_origin(expr: &Expression, event_param: &str) -> bool {
 /// Passing the origin to `console.*` reports it, it does not validate it, so
 /// such a call must not count as an origin check.
 fn is_console_call(call: &CallExpression) -> bool {
-    call.callee
-        .get_member_expr()
-        .is_some_and(|member| matches!(member.object(), Expression::Identifier(id) if id.name == "console"))
+    call.callee.get_member_expr().is_some_and(
+        |member| matches!(member.object(), Expression::Identifier(id) if id.name == "console"),
+    )
 }
 
 /// Checks whether an expression is
