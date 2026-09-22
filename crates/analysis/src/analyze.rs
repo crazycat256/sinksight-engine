@@ -29,16 +29,14 @@ impl Analyzer {
 
     pub fn analyze(&self, source: &str) -> AnalyzeResult {
         #[cfg(not(target_family = "wasm"))]
-        {
-            return stacker::grow(64 * 1024 * 1024, || {
-                analyze_with_handle(source, self.library_db.as_ref().map(LoadedDb::handle))
-            });
-        }
+        let result = stacker::grow(64 * 1024 * 1024, || {
+            analyze_with_handle(source, self.library_db.as_ref().map(LoadedDb::handle))
+        });
 
         #[cfg(target_family = "wasm")]
-        {
-            analyze_with_handle(source, self.library_db.as_ref().map(LoadedDb::handle))
-        }
+        let result = analyze_with_handle(source, self.library_db.as_ref().map(LoadedDb::handle));
+
+        result
     }
 }
 
