@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -11,7 +10,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
-use crate::cdp::{has_error_code, Client, Event};
+use crate::cdp::{error_code, has_error_code, Client, Event};
 use crate::store::{CapturedScript, Store};
 use crate::worker::Pool;
 
@@ -30,6 +29,7 @@ pub struct Config {
     pub max_script_bytes: usize,
     pub analysis_concurrency: usize,
     pub analysis_worker: PathBuf,
+    pub verbose_source_errors: bool,
 }
 
 #[derive(Clone)]
@@ -87,6 +87,89 @@ impl PendingBodies {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum SourceKind {
+    Debugger,
+    Network,
+}
+
+impl std::fmt::Display for SourceKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Debugger => formatter.write_str("Debugger.getScriptSource"),
+            Self::Network => formatter.write_str("Network.getResponseBody"),
+        }
+    }
+}
+
+struct SourceFailures {
+    verbose: bool,
+    counts: Mutex<HashMap<(SourceKind, Option<i64>), usize>>,
+}
+
+impl SourceFailures {
+    fn new(verbose: bool) -> Self {
+        Self {
+            verbose,
+            counts: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn report(&self, kind: SourceKind, url: &str, error: &anyhow::Error) {
+        let code = error_code(error);
+        let count = {
+            let mut counts = self.counts.lock().await;
+            let count = counts.entry((kind, code)).or_default();
+            *count += 1;
+            *count
+        };
+        if self.verbose || count <= 10 {
+            eprintln!("Cannot retrieve script source via {kind} for {url}: {error:#}");
+        } else if count == 11 {
+            eprintln!(
+                "Suppressing further {kind} source errors with code {}; use --verbose-source-errors to show each one",
+                code.map_or_else(|| "unknown".to_owned(), |code| code.to_string())
+            );
+        }
+    }
+
+    async fn summarize(&self) {
+        let counts = {
+            let mut counts = self.counts.lock().await;
+            std::mem::take(&mut *counts)
+        };
+        if counts.is_empty() {
+            return;
+        }
+        let mut counts = counts.into_iter().collect::<Vec<_>>();
+        counts.sort_by_key(|((kind, code), _)| (format!("{kind}"), *code));
+        for ((kind, code), count) in counts {
+            eprintln!(
+                "Source retrieval summary: {count} failure(s) via {kind}, code {}",
+                code.map_or_else(|| "unknown".to_owned(), |code| code.to_string())
+            );
+        }
+    }
+}
+
+async fn call_source_command(
+    client: &Client,
+    method: &str,
+    params: Value,
+    session: &str,
+) -> Result<Value> {
+    let result = client.call(method, params.clone(), Some(session)).await;
+    if result
+        .as_ref()
+        .err()
+        .is_some_and(|error| has_error_code(error, -32000))
+    {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        return client.call(method, params, Some(session)).await;
+    }
+    result
+}
+
 struct Runtime {
     store: Mutex<Store>,
     targets: RwLock<HashMap<String, Target>>,
@@ -95,7 +178,7 @@ struct Runtime {
     max_script_bytes: usize,
     semaphore: Semaphore,
     source_retrievals: Semaphore,
-    unavailable_source_reported: AtomicBool,
+    source_failures: SourceFailures,
     analysis_gates: Mutex<HashMap<String, Weak<Mutex<()>>>>,
 }
 
@@ -110,7 +193,7 @@ pub async fn run(config: Config) -> Result<()> {
         max_script_bytes: config.max_script_bytes,
         semaphore: Semaphore::new(concurrency),
         source_retrievals: Semaphore::new(concurrency.saturating_mul(2)),
-        unavailable_source_reported: AtomicBool::new(false),
+        source_failures: SourceFailures::new(config.verbose_source_errors),
         analysis_gates: Mutex::new(HashMap::new()),
     });
     runtime.store.lock().await.export()?;
@@ -131,9 +214,6 @@ pub async fn run(config: Config) -> Result<()> {
         waiting_for_chromium = false;
         let ready_file = config.output.join("collector.ready");
         remove_ready_file(&ready_file).await;
-        runtime
-            .unavailable_source_reported
-            .store(false, Ordering::Relaxed);
         if let Err(error) =
             collect_connection(&endpoint, &ready_file, config.mode, runtime.clone()).await
         {
@@ -141,6 +221,7 @@ pub async fn run(config: Config) -> Result<()> {
                 eprintln!("CDP collection failed: {error:#}");
             }
         }
+        runtime.source_failures.summarize().await;
         remove_ready_file(&ready_file).await;
         runtime.targets.write().await.clear();
         runtime.network_scripts.lock().await.clear();
@@ -276,25 +357,28 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                 let Ok(permit) = runtime.source_retrievals.acquire().await else {
                     return;
                 };
-                let result = client
-                    .call(
-                        "Debugger.getScriptSource",
-                        json!({"scriptId": script_id}),
-                        Some(&session),
-                    )
-                    .await;
-                drop(permit);
-                match result.and_then(|value| {
+                let result = call_source_command(
+                    &client,
+                    "Debugger.getScriptSource",
+                    json!({"scriptId": script_id}),
+                    &session,
+                )
+                .await
+                .and_then(|value| {
                     value["scriptSource"]
                         .as_str()
                         .map(str::to_owned)
                         .context("missing scriptSource")
-                }) {
+                });
+                drop(permit);
+                match result {
                     Ok(source) => process(runtime, source, script_url, page_url).await,
-                    Err(error) if source_unavailable(&error) => {
-                        report_unavailable_source(&runtime);
+                    Err(error) => {
+                        runtime
+                            .source_failures
+                            .report(SourceKind::Debugger, &script_url, &error)
+                            .await
                     }
-                    Err(error) => eprintln!("Cannot retrieve script source: {error:#}"),
                 }
             });
         }
@@ -341,20 +425,23 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                 let Ok(permit) = runtime.source_retrievals.acquire().await else {
                     return;
                 };
-                let result = client
-                    .call(
-                        "Network.getResponseBody",
-                        json!({"requestId": request_id}),
-                        Some(&session),
-                    )
-                    .await;
+                let result = call_source_command(
+                    &client,
+                    "Network.getResponseBody",
+                    json!({"requestId": request_id}),
+                    &session,
+                )
+                .await
+                .and_then(decode_body);
                 drop(permit);
-                match result.and_then(decode_body) {
+                match result {
                     Ok(source) => process(runtime, source, script_url, page_url).await,
-                    Err(error) if source_unavailable(&error) => {
-                        report_unavailable_source(&runtime);
+                    Err(error) => {
+                        runtime
+                            .source_failures
+                            .report(SourceKind::Network, &script_url, &error)
+                            .await
                     }
-                    Err(error) => eprintln!("Cannot retrieve network script: {error:#}"),
                 }
             });
         }
@@ -621,19 +708,6 @@ fn ignored_url(url: &str) -> bool {
     ]
     .iter()
     .any(|prefix| url.starts_with(prefix))
-}
-
-fn source_unavailable(error: &anyhow::Error) -> bool {
-    has_error_code(error, -32000) || has_error_code(error, -32001)
-}
-
-fn report_unavailable_source(runtime: &Runtime) {
-    if !runtime
-        .unavailable_source_reported
-        .swap(true, Ordering::Relaxed)
-    {
-        eprintln!("Some script sources became unavailable during navigation; collection continues");
-    }
 }
 
 fn is_connection_transition(error: &anyhow::Error) -> bool {

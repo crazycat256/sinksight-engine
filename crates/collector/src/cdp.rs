@@ -39,6 +39,12 @@ pub fn has_error_code(error: &anyhow::Error, code: i64) -> bool {
     })
 }
 
+pub fn error_code(error: &anyhow::Error) -> Option<i64> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<CommandError>().map(|error| error.code))
+}
+
 #[derive(Clone, Debug)]
 pub struct Event {
     pub method: String,

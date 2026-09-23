@@ -35,6 +35,10 @@ disables debugger pauses so a `debugger` statement cannot stop the browser.
 the inline scripts and handlers present in the initial DOM. This is less
 complete, but useful when minimizing observable debugger side effects matters.
 
+Source retrieval failures are grouped by CDP method and error code. The first
+ten failures in each group are printed, followed by a summary when Chromium
+disconnects. Pass `--verbose-source-errors` to print every failure.
+
 `analyze` is a manual utility and is not required after `collect`:
 
 ```text

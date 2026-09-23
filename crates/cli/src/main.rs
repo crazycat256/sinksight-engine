@@ -31,6 +31,8 @@ enum Command {
         max_script_bytes: usize,
         #[arg(long, default_value_t = 4)]
         analysis_concurrency: usize,
+        #[arg(long)]
+        verbose_source_errors: bool,
     },
     Analyze {
         path: PathBuf,
@@ -79,6 +81,7 @@ async fn main() -> Result<()> {
             library_db,
             max_script_bytes,
             analysis_concurrency,
+            verbose_source_errors,
         } => {
             let config = Config {
                 devtools_active_port,
@@ -89,6 +92,7 @@ async fn main() -> Result<()> {
                 analysis_concurrency,
                 analysis_worker: std::env::current_exe()
                     .context("cannot locate sinksight executable")?,
+                verbose_source_errors,
             };
             tokio::select! {
                 result = collector::run(config) => result?,
