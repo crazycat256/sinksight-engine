@@ -44,28 +44,35 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - if: steps.version.outputs.publish == 'true'
         run: cargo build --release --locked -p sinksight-cli
-      - name: Package binary
+      - name: Prepare binary
         if: steps.version.outputs.publish == 'true'
+        id: binary
         shell: bash
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          archive="sinksight-${RELEASE_TAG}-x86_64-unknown-linux-gnu.tar.gz"
-          staging="sinksight-${RELEASE_TAG}-x86_64-unknown-linux-gnu"
-          mkdir "$staging"
-          cp target/release/sinksight LICENSE README.md "$staging/"
-          tar -czf "$archive" "$staging"
-          sha256sum "$archive" > "$archive.sha256"
+          asset="sinksight-${RELEASE_TAG}-x86_64-unknown-linux-gnu"
+          install -m 0755 target/release/sinksight "$asset"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$asset" | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Publish release
         if: steps.version.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           RELEASE_COMMIT: ${{ github.event.workflow_run.head_sha }}
-        run: >-
-          gh release create "$RELEASE_TAG"
-          --target "$RELEASE_COMMIT"
-          --generate-notes
-          sinksight-*.tar.gz
-          sinksight-*.sha256
+          RELEASE_ASSET: ${{ steps.binary.outputs.asset }}
+          RELEASE_SHA256: ${{ steps.binary.outputs.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$RELEASE_TAG" \
+            -f target_commitish="$RELEASE_COMMIT" \
+            --jq .body > release-notes.md
+          printf '\n## SHA-256\n\n```text\n%s  %s\n```\n' "$RELEASE_SHA256" "$RELEASE_ASSET" >> release-notes.md
+          gh release create "$RELEASE_TAG" \
+            --target "$RELEASE_COMMIT" \
+            --notes-file release-notes.md \
+            "$RELEASE_ASSET"

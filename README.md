@@ -61,10 +61,6 @@ browser profile's `DevToolsActivePort`, and expose the output directory in the
 agent workspace. SinkSight does not own Chromium and does not add an HTTP
 service or an operator UI.
 
-Tagged releases contain a versioned Linux binary and a SHA-256 checksum.
-Consumers should pin both instead of downloading an artifact from a moving
-branch.
-
 ## License
 
 This project is licensed under the GNU General Public License v3.0 or later.
