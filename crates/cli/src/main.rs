@@ -27,8 +27,10 @@ enum Command {
         mode: ModeArgument,
         #[arg(long)]
         library_db: Option<PathBuf>,
-        #[arg(long, default_value_t = 10 * 1024 * 1024)]
-        max_script_bytes: usize,
+        #[arg(long, default_value_t = 64 * 1024 * 1024)]
+        max_capture_bytes: usize,
+        #[arg(long, default_value_t = 16 * 1024 * 1024)]
+        max_analysis_bytes: usize,
         #[arg(long, default_value_t = 4)]
         analysis_concurrency: usize,
         #[arg(long)]
@@ -79,7 +81,8 @@ async fn main() -> Result<()> {
             output,
             mode,
             library_db,
-            max_script_bytes,
+            max_capture_bytes,
+            max_analysis_bytes,
             analysis_concurrency,
             verbose_source_errors,
         } => {
@@ -88,7 +91,8 @@ async fn main() -> Result<()> {
                 output,
                 mode: mode.into(),
                 library_db: read_optional(library_db).await?,
-                max_script_bytes,
+                max_capture_bytes,
+                max_analysis_bytes,
                 analysis_concurrency,
                 analysis_worker: std::env::current_exe()
                     .context("cannot locate sinksight executable")?,

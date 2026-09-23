@@ -27,7 +27,8 @@ pub struct Config {
     pub output: PathBuf,
     pub mode: Mode,
     pub library_db: Option<Vec<u8>>,
-    pub max_script_bytes: usize,
+    pub max_capture_bytes: usize,
+    pub max_analysis_bytes: usize,
     pub analysis_concurrency: usize,
     pub analysis_worker: PathBuf,
     pub verbose_source_errors: bool,
@@ -176,7 +177,8 @@ struct Runtime {
     targets: RwLock<HashMap<String, Target>>,
     network_scripts: Mutex<PendingBodies>,
     analyzer: Pool,
-    max_script_bytes: usize,
+    max_capture_bytes: usize,
+    max_analysis_bytes: usize,
     semaphore: Semaphore,
     source_retrievals: Semaphore,
     source_failures: SourceFailures,
@@ -193,7 +195,8 @@ pub async fn run(config: Config) -> Result<()> {
         targets: RwLock::new(HashMap::new()),
         network_scripts: Mutex::new(PendingBodies::default()),
         analyzer,
-        max_script_bytes: config.max_script_bytes,
+        max_capture_bytes: config.max_capture_bytes,
+        max_analysis_bytes: config.max_analysis_bytes,
         semaphore: Semaphore::new(concurrency),
         source_retrievals: Semaphore::new(concurrency.saturating_mul(2)),
         source_failures: SourceFailures::new(config.verbose_source_errors),
@@ -535,7 +538,7 @@ async fn configure_target(
             "Network.enable",
             json!({
                 "maxTotalBufferSize": 128 * 1024 * 1024,
-                "maxResourceBufferSize": runtime.max_script_bytes,
+                "maxResourceBufferSize": runtime.max_capture_bytes,
                 "enableDurableMessages": true
             }),
             Some(session),
@@ -654,8 +657,15 @@ async fn set_target_url(runtime: &Runtime, session: &str, url: String) {
 }
 
 async fn process(runtime: Arc<Runtime>, source: String, script_url: String, page_url: String) {
-    if ignored_url(&page_url) || source.trim().is_empty() || source.len() > runtime.max_script_bytes
-    {
+    if ignored_url(&page_url) || source.trim().is_empty() {
+        return;
+    }
+    if source.len() > runtime.max_capture_bytes {
+        eprintln!(
+            "Discarding script {script_url}: {} bytes exceed the {}-byte capture limit",
+            source.len(),
+            runtime.max_capture_bytes
+        );
         return;
     }
     let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
@@ -680,18 +690,31 @@ async fn process(runtime: Arc<Runtime>, source: String, script_url: String, page
         }
     }
 
-    let Ok(_permit) = runtime.semaphore.acquire().await else {
-        return;
-    };
-    let result = match runtime.analyzer.analyze(&source).await {
-        Ok(result) => result,
-        Err(error) => {
-            eprintln!("Cannot analyze script {hash}: {error:#}");
-            sinksight_analysis::AnalyzeResult {
-                findings: Vec::new(),
-                structural_hash: String::new(),
-                library: None,
-                analysis_error: Some(error.to_string()),
+    let result = if source.len() > runtime.max_analysis_bytes {
+        sinksight_analysis::AnalyzeResult {
+            findings: Vec::new(),
+            structural_hash: String::new(),
+            library: None,
+            analysis_error: Some(format!(
+                "script has {} bytes and exceeds the {}-byte analysis limit; source retained without analysis",
+                source.len(),
+                runtime.max_analysis_bytes
+            )),
+        }
+    } else {
+        let Ok(_permit) = runtime.semaphore.acquire().await else {
+            return;
+        };
+        match runtime.analyzer.analyze(&source).await {
+            Ok(result) => result,
+            Err(error) => {
+                eprintln!("Cannot analyze script {hash}: {error:#}");
+                sinksight_analysis::AnalyzeResult {
+                    findings: Vec::new(),
+                    structural_hash: String::new(),
+                    library: None,
+                    analysis_error: Some(error.to_string()),
+                }
             }
         }
     };
