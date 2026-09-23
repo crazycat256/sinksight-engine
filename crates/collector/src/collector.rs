@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -106,21 +106,24 @@ impl std::fmt::Display for SourceKind {
 
 struct SourceFailures {
     verbose: bool,
-    counts: Mutex<HashMap<(SourceKind, Option<i64>), usize>>,
+    counts: StdMutex<HashMap<(SourceKind, Option<i64>), usize>>,
 }
 
 impl SourceFailures {
     fn new(verbose: bool) -> Self {
         Self {
             verbose,
-            counts: Mutex::new(HashMap::new()),
+            counts: StdMutex::new(HashMap::new()),
         }
     }
 
-    async fn report(&self, kind: SourceKind, url: &str, error: &anyhow::Error) {
+    fn report(&self, kind: SourceKind, url: &str, error: &anyhow::Error) {
         let code = error_code(error);
         let count = {
-            let mut counts = self.counts.lock().await;
+            let mut counts = self
+                .counts
+                .lock()
+                .expect("source failure count lock poisoned");
             let count = counts.entry((kind, code)).or_default();
             *count += 1;
             *count
@@ -132,12 +135,20 @@ impl SourceFailures {
                 "Suppressing further {kind} source errors with code {}; use --verbose-source-errors to show each one",
                 code.map_or_else(|| "unknown".to_owned(), |code| code.to_string())
             );
+        } else if count == 100 || count % 1000 == 0 {
+            eprintln!(
+                "Source retrieval failures so far: {count} via {kind}, code {}",
+                code.map_or_else(|| "unknown".to_owned(), |code| code.to_string())
+            );
         }
     }
 
-    async fn summarize(&self) {
+    fn summarize(&self) {
         let counts = {
-            let mut counts = self.counts.lock().await;
+            let mut counts = self
+                .counts
+                .lock()
+                .expect("source failure count lock poisoned");
             std::mem::take(&mut *counts)
         };
         if counts.is_empty() {
@@ -151,6 +162,12 @@ impl SourceFailures {
                 code.map_or_else(|| "unknown".to_owned(), |code| code.to_string())
             );
         }
+    }
+}
+
+impl Drop for SourceFailures {
+    fn drop(&mut self) {
+        self.summarize();
     }
 }
 
@@ -241,7 +258,7 @@ pub async fn run(config: Config) -> Result<()> {
             }
         }
         eprintln!("Chromium DevTools connection closed; waiting for a new endpoint");
-        runtime.source_failures.summarize().await;
+        runtime.source_failures.summarize();
         remove_ready_file(&ready_file).await;
         runtime.targets.write().await.clear();
         runtime.network_scripts.lock().await.clear();
@@ -416,7 +433,6 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                         runtime
                             .source_failures
                             .report(SourceKind::Debugger, &script_url, &error)
-                            .await
                     }
                 }
             });
@@ -479,7 +495,6 @@ async fn dispatch(event: Event, mode: Mode, client: Client, runtime: Arc<Runtime
                         runtime
                             .source_failures
                             .report(SourceKind::Network, &script_url, &error)
-                            .await
                     }
                 }
             });
