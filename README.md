@@ -43,7 +43,7 @@ sinksight analyze file.js --library-db /path/to/libraries.slhdb
 
 ## Output
 
-- `scripts/`: captured JavaScript, stored verbatim, sharded by content hash.
+- `scripts/`: representative JavaScript captures stored verbatim under stable paths.
 - `export/findings.csv`: compact list intended for quick agent inspection.
 - `export/findings.json`: the same findings as structured data.
 - `export/origins.json`: mapping from saved scripts to pages that loaded them.
@@ -51,8 +51,9 @@ sinksight analyze file.js --library-db /path/to/libraries.slhdb
 - `metadata.db`: durable deduplication and observation state.
 
 Exports are replaced atomically. An agent can therefore read them while the
-collector is running. Script contents are deduplicated by SHA-256 while every
-observed page origin is retained.
+collector is running. Exact SHA-256 matches avoid repeated analysis, while
+structurally equivalent scripts replace their previous representative and
+retain every observed page and script URL.
 
 ## Pamphagos integration contract
 

@@ -125,7 +125,23 @@ impl Store {
             return Ok(inserted);
         }
 
-        let relative_path = script_path(captured.script_url, captured.hash);
+        let replaced: Option<(String, String)> = if captured.result.structural_hash.is_empty() {
+            None
+        } else {
+            self.connection
+                .query_row(
+                    "SELECT hash, path FROM scripts
+                     WHERE structural_hash = ?1
+                     ORDER BY captured_at DESC LIMIT 1",
+                    [&captured.result.structural_hash],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+        };
+        let relative_path = replaced
+            .as_ref()
+            .map(|(_, path)| PathBuf::from(path))
+            .unwrap_or_else(|| script_path(captured.script_url, captured.hash));
         let absolute_path = self.output.join(&relative_path);
         if let Some(parent) = absolute_path.parent() {
             fs::create_dir_all(parent)?;
@@ -147,8 +163,16 @@ impl Store {
                 unix_timestamp(),
             ],
         )?;
+        if let Some((replaced_hash, _)) = &replaced {
+            transaction.execute(
+                "INSERT OR IGNORE INTO observations (hash, page_url, script_url)
+                 SELECT ?1, page_url, script_url FROM observations WHERE hash = ?2",
+                params![captured.hash, replaced_hash],
+            )?;
+            transaction.execute("DELETE FROM scripts WHERE hash = ?1", [replaced_hash])?;
+        }
         transaction.execute(
-            "INSERT INTO observations (hash, page_url, script_url) VALUES (?1, ?2, ?3)",
+            "INSERT OR IGNORE INTO observations (hash, page_url, script_url) VALUES (?1, ?2, ?3)",
             params![captured.hash, captured.page_url, captured.script_url],
         )?;
         for finding in &captured.result.findings {
