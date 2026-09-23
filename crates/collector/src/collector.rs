@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -96,6 +96,7 @@ struct Runtime {
     semaphore: Semaphore,
     source_retrievals: Semaphore,
     unavailable_source_reported: AtomicBool,
+    analysis_gates: Mutex<HashMap<String, Weak<Mutex<()>>>>,
 }
 
 pub async fn run(config: Config) -> Result<()> {
@@ -110,6 +111,7 @@ pub async fn run(config: Config) -> Result<()> {
         semaphore: Semaphore::new(concurrency),
         source_retrievals: Semaphore::new(concurrency.saturating_mul(2)),
         unavailable_source_reported: AtomicBool::new(false),
+        analysis_gates: Mutex::new(HashMap::new()),
     });
     runtime.store.lock().await.export()?;
 
@@ -534,6 +536,8 @@ async fn process(runtime: Arc<Runtime>, source: String, script_url: String, page
         return;
     }
     let hash = format!("{:x}", Sha256::digest(source.as_bytes()));
+    let gate = analysis_gate(&runtime.analysis_gates, &hash).await;
+    let _gate = gate.lock().await;
 
     // The same script is re-delivered on every page that loads it, so settle
     // deduplication before paying for an analysis.
@@ -586,6 +590,21 @@ async fn process(runtime: Arc<Runtime>, source: String, script_url: String, page
         Ok(false) => {}
         Err(error) => eprintln!("Cannot store script: {error:#}"),
     }
+}
+
+async fn analysis_gate(
+    gates: &Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    hash: &str,
+) -> Arc<Mutex<()>> {
+    let mut gates = gates.lock().await;
+    gates.retain(|_, gate| gate.strong_count() != 0);
+    if let Some(gate) = gates.get(hash).and_then(Weak::upgrade) {
+        return gate;
+    }
+
+    let gate = Arc::new(Mutex::new(()));
+    gates.insert(hash.to_owned(), Arc::downgrade(&gate));
+    gate
 }
 
 fn field(value: &Value, key: &str) -> Option<String> {
@@ -646,5 +665,28 @@ fn decode_body(value: Value) -> Result<String> {
         Ok(String::from_utf8_lossy(&bytes).into_owned())
     } else {
         Ok(body.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn analysis_gate_is_shared_while_an_analysis_is_live() {
+        let gates = Mutex::new(HashMap::new());
+
+        let first = analysis_gate(&gates, "same-script").await;
+        let second = analysis_gate(&gates, "same-script").await;
+        let other = analysis_gate(&gates, "other-script").await;
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first, &other));
+        drop(first);
+        drop(second);
+        drop(other);
+
+        let replacement = analysis_gate(&gates, "same-script").await;
+        assert_eq!(Arc::strong_count(&replacement), 1);
     }
 }
