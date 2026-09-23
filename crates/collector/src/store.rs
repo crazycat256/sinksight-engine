@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,6 +10,7 @@ use serde::Serialize;
 use url::Url;
 
 use sinksight_analysis::AnalyzeResult;
+type UrlIndex = BTreeMap<String, Vec<String>>;
 
 pub struct CapturedScript<'a> {
     pub hash: &'a str,
@@ -197,6 +198,7 @@ impl Store {
     }
 
     pub fn export(&self) -> Result<()> {
+        let (page_urls_by_hash, script_urls_by_hash) = self.observation_urls()?;
         let mut statement = self.connection.prepare(
             "SELECT f.id, s.hash, s.path,
                     f.detector, f.category, f.start_line, f.start_column,
@@ -208,7 +210,7 @@ impl Store {
         let mut findings = Vec::new();
         while let Some(row) = rows.next()? {
             let hash: String = row.get(1)?;
-            let page_urls = self.page_urls(&hash)?;
+            let page_urls = page_urls_by_hash.get(&hash).cloned().unwrap_or_default();
             let start_line: u32 = row.get(5)?;
             let start_column: u32 = row.get(6)?;
             let end_line: u32 = row.get(7)?;
@@ -217,7 +219,7 @@ impl Store {
                 id: row.get(0)?,
                 file: row.get(2)?,
                 location: format!("L{start_line}:{start_column}-L{end_line}:{end_column}"),
-                script_urls: self.script_urls(&hash)?,
+                script_urls: script_urls_by_hash.get(&hash).cloned().unwrap_or_default(),
                 detector: row.get(3)?,
                 category: row.get(4)?,
                 snippet: row.get(9)?,
@@ -264,7 +266,10 @@ impl Store {
         })?;
         for script in scripts {
             let (hash, path) = script?;
-            origins.insert(path, self.page_urls(&hash)?);
+            origins.insert(
+                path,
+                page_urls_by_hash.get(&hash).cloned().unwrap_or_default(),
+            );
         }
         atomic_write(
             &self.output.join("export/origins.json"),
@@ -287,8 +292,8 @@ impl Store {
             let (hash, file, library, analysis_error) = row?;
             scripts.push(ExportScript {
                 file,
-                script_urls: self.script_urls(&hash)?,
-                page_urls: self.page_urls(&hash)?,
+                script_urls: script_urls_by_hash.get(&hash).cloned().unwrap_or_default(),
+                page_urls: page_urls_by_hash.get(&hash).cloned().unwrap_or_default(),
                 library: serde_json::from_str(&library)?,
                 analysis_error,
             });
@@ -300,26 +305,36 @@ impl Store {
         Ok(())
     }
 
-    fn page_urls(&self, hash: &str) -> Result<Vec<String>> {
+    fn observation_urls(&self) -> Result<(UrlIndex, UrlIndex)> {
+        let mut pages: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut scripts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut statement = self.connection.prepare(
-            "SELECT DISTINCT page_url FROM observations WHERE hash = ?1 ORDER BY page_url",
+            "SELECT hash, page_url, script_url FROM observations ORDER BY hash, page_url, script_url",
         )?;
-        let page_urls = statement
-            .query_map([hash], |row| row.get(0))?
-            .collect::<Result<Vec<String>, _>>()
-            .map_err(Into::into);
-        page_urls
-    }
-
-    fn script_urls(&self, hash: &str) -> Result<Vec<String>> {
-        let mut statement = self.connection.prepare(
-            "SELECT DISTINCT script_url FROM observations
-             WHERE hash = ?1 AND script_url != '' ORDER BY script_url",
-        )?;
-        let urls = statement
-            .query_map([hash], |row| row.get(0))?
-            .collect::<Result<Vec<String>, _>>()?;
-        Ok(urls)
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (hash, page_url, script_url) = row?;
+            pages.entry(hash.clone()).or_default().insert(page_url);
+            if !script_url.is_empty() {
+                scripts.entry(hash).or_default().insert(script_url);
+            }
+        }
+        Ok((
+            pages
+                .into_iter()
+                .map(|(hash, urls)| (hash, urls.into_iter().collect()))
+                .collect(),
+            scripts
+                .into_iter()
+                .map(|(hash, urls)| (hash, urls.into_iter().collect()))
+                .collect(),
+        ))
     }
 }
 

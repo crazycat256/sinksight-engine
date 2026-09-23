@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -8,7 +9,7 @@ use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::broadcast::error::RecvError;
-use tokio::sync::{Mutex, RwLock, Semaphore};
+use tokio::sync::{Mutex, Notify, RwLock, Semaphore};
 
 use crate::cdp::{error_code, has_error_code, Client, Event};
 use crate::store::{CapturedScript, Store};
@@ -180,6 +181,8 @@ struct Runtime {
     source_retrievals: Semaphore,
     source_failures: SourceFailures,
     analysis_gates: Mutex<HashMap<String, Weak<Mutex<()>>>>,
+    export_dirty: AtomicBool,
+    export_notify: Notify,
 }
 
 pub async fn run(config: Config) -> Result<()> {
@@ -195,8 +198,11 @@ pub async fn run(config: Config) -> Result<()> {
         source_retrievals: Semaphore::new(concurrency.saturating_mul(2)),
         source_failures: SourceFailures::new(config.verbose_source_errors),
         analysis_gates: Mutex::new(HashMap::new()),
+        export_dirty: AtomicBool::new(false),
+        export_notify: Notify::new(),
     });
     runtime.store.lock().await.export()?;
+    tokio::spawn(export_loop(runtime.clone()));
 
     let mut waiting_for_chromium = false;
     loop {
@@ -227,6 +233,24 @@ pub async fn run(config: Config) -> Result<()> {
         runtime.network_scripts.lock().await.clear();
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+}
+
+async fn export_loop(runtime: Arc<Runtime>) {
+    loop {
+        runtime.export_notify.notified().await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        if !runtime.export_dirty.swap(false, Ordering::AcqRel) {
+            continue;
+        }
+        if let Err(error) = runtime.store.lock().await.export() {
+            eprintln!("Cannot export findings: {error:#}");
+        }
+    }
+}
+
+fn request_export(runtime: &Runtime) {
+    runtime.export_dirty.store(true, Ordering::Release);
+    runtime.export_notify.notify_one();
 }
 
 async fn endpoint_from_file(path: &Path) -> Result<String> {
@@ -632,9 +656,7 @@ async fn process(runtime: Arc<Runtime>, source: String, script_url: String, page
         let mut store = runtime.store.lock().await;
         match store.observe(&hash, &page_url, &script_url) {
             Ok(Some(true)) => {
-                if let Err(error) = store.export() {
-                    eprintln!("Cannot export findings: {error:#}");
-                }
+                request_export(&runtime);
                 return;
             }
             Ok(Some(false)) => return,
@@ -669,11 +691,7 @@ async fn process(runtime: Arc<Runtime>, source: String, script_url: String, page
         page_url: &page_url,
         result: &result,
     }) {
-        Ok(true) => {
-            if let Err(error) = store.export() {
-                eprintln!("Cannot export findings: {error:#}");
-            }
-        }
+        Ok(true) => request_export(&runtime),
         Ok(false) => {}
         Err(error) => eprintln!("Cannot store script: {error:#}"),
     }
