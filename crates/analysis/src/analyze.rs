@@ -195,6 +195,12 @@ fn analyze_with_handle(source: &str, library_db: Option<u32>) -> AnalyzeResult {
     analysis_errors.extend(semantic_ret.errors.iter().map(ToString::to_string));
     let ctx = AnalysisCtx::new(source, &semantic_ret.semantic, &allocator);
     let raw_matches = detect_all(&ctx);
+    if ctx.inference_budget_exhausted() {
+        analysis_errors.push(
+            "safety inference budget exhausted; unresolved values were treated as unsafe"
+                .to_owned(),
+        );
+    }
 
     let line_index = LineIndex::new(source);
     let mut findings: Vec<Finding> = raw_matches

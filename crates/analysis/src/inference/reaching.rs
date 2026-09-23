@@ -497,6 +497,10 @@ impl<'a, 'v> Analyzer<'a, 'v> {
         let mut acc = Outgoing::empty();
         for stmt in stmts {
             let probe = until_use && self.contains_use(stmt.span());
+            if !self.ctx.consume_inference_step() {
+                return Outgoing::found(Fact::Unsafe);
+            }
+
             let out = self.exec_stmt(stmt, fact, probe);
             if out.found.is_some() {
                 acc.found = out.found;

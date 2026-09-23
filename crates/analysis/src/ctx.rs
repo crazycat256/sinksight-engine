@@ -8,11 +8,14 @@ use oxc_semantic::Semantic;
 use oxc_span::{Atom, Span};
 
 pub use oxc_semantic::{ScopeId, SymbolId};
+const DEFAULT_INFERENCE_BUDGET: usize = 250_000;
 
 pub struct AnalysisCtx<'a> {
     pub source: &'a str,
     pub semantic: &'a Semantic<'a>,
     pub allocator: &'a Allocator,
+    inference_steps_remaining: Cell<usize>,
+    inference_budget_exhausted: Cell<bool>,
 }
 
 impl<'a> AnalysisCtx<'a> {
@@ -21,7 +24,23 @@ impl<'a> AnalysisCtx<'a> {
             source,
             semantic,
             allocator,
+            inference_steps_remaining: Cell::new(DEFAULT_INFERENCE_BUDGET),
+            inference_budget_exhausted: Cell::new(false),
         }
+    }
+
+    pub fn consume_inference_step(&self) -> bool {
+        let remaining = self.inference_steps_remaining.get();
+        if remaining == 0 {
+            self.inference_budget_exhausted.set(true);
+            return false;
+        }
+        self.inference_steps_remaining.set(remaining - 1);
+        true
+    }
+
+    pub fn inference_budget_exhausted(&self) -> bool {
+        self.inference_budget_exhausted.get()
     }
 
     pub fn root_scope_id(&self) -> ScopeId {
