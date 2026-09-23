@@ -154,18 +154,29 @@ pub(super) fn identifier_use_is_safe<'a>(
         return None;
     }
 
-    let key = format!(
+    let cache_key = (symbol_id.index(), ident.span.start, ident.span.end);
+    let cacheable = visited.is_empty();
+    if cacheable {
+        if let Some(result) = ctx.cached_reaching_result(cache_key) {
+            return Some(result);
+        }
+    }
+
+    let visited_key = format!(
         "$reach:{}:{}:{}",
         symbol_id.index(),
         ident.span.start,
         ident.span.end
     );
-    if visited.contains(&key) {
+    if visited.contains(&visited_key) {
         return Some(false);
     }
-    visited.insert(key.clone());
+    visited.insert(visited_key.clone());
     let result = identifier_use_is_safe_after_guard(ctx, ident, symbol_id, scope_id, visited);
-    visited.remove(&key);
+    visited.remove(&visited_key);
+    if cacheable {
+        ctx.cache_reaching_result(cache_key, result);
+    }
     Some(result)
 }
 

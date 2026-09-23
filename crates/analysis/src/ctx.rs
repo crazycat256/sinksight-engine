@@ -1,6 +1,7 @@
 //! Shared analysis context for detectors and inference.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 
 use oxc_allocator::{Allocator, Box as ArenaBox};
 use oxc_ast::ast::{Expression, IdentifierReference};
@@ -16,6 +17,7 @@ pub struct AnalysisCtx<'a> {
     pub allocator: &'a Allocator,
     inference_steps_remaining: Cell<usize>,
     inference_budget_exhausted: Cell<bool>,
+    reaching_cache: RefCell<HashMap<(usize, u32, u32), bool>>,
 }
 
 impl<'a> AnalysisCtx<'a> {
@@ -26,6 +28,7 @@ impl<'a> AnalysisCtx<'a> {
             allocator,
             inference_steps_remaining: Cell::new(DEFAULT_INFERENCE_BUDGET),
             inference_budget_exhausted: Cell::new(false),
+            reaching_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -41,6 +44,14 @@ impl<'a> AnalysisCtx<'a> {
 
     pub fn inference_budget_exhausted(&self) -> bool {
         self.inference_budget_exhausted.get()
+    }
+
+    pub fn cached_reaching_result(&self, key: (usize, u32, u32)) -> Option<bool> {
+        self.reaching_cache.borrow().get(&key).copied()
+    }
+
+    pub fn cache_reaching_result(&self, key: (usize, u32, u32), result: bool) {
+        self.reaching_cache.borrow_mut().insert(key, result);
     }
 
     pub fn root_scope_id(&self) -> ScopeId {
