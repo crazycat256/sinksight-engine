@@ -210,7 +210,17 @@ pub async fn run(config: Config) -> Result<()> {
             Ok(endpoint) => endpoint,
             Err(error) => {
                 if !waiting_for_chromium {
-                    eprintln!("Waiting for Chromium: {error:#}");
+                    if error
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                    {
+                        eprintln!(
+                            "Waiting for Chromium DevTools endpoint at {}",
+                            config.devtools_active_port.display()
+                        );
+                    } else {
+                        eprintln!("Cannot discover Chromium DevTools endpoint: {error:#}");
+                    }
                     waiting_for_chromium = true;
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -227,6 +237,7 @@ pub async fn run(config: Config) -> Result<()> {
                 eprintln!("CDP collection failed: {error:#}");
             }
         }
+        eprintln!("Chromium DevTools connection closed; waiting for a new endpoint");
         runtime.source_failures.summarize().await;
         remove_ready_file(&ready_file).await;
         runtime.targets.write().await.clear();
@@ -286,6 +297,7 @@ async fn collect_connection(
     tokio::fs::write(ready_file, endpoint)
         .await
         .with_context(|| format!("cannot write {}", ready_file.display()))?;
+    eprintln!("Attached to Chromium DevTools at {endpoint}");
 
     loop {
         let event = match events.recv().await {
