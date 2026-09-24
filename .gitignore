@@ -1,4 +1,5 @@
 /target
+crates/wasm/pkg
 **/*.rs.bk
 *.slhdb
 **/tests/fixtures/.cache/

@@ -18,3 +18,4 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --all-targets --locked
       - run: cargo check -p sinksight-analysis --target wasm32-unknown-unknown --locked
+      - run: cargo check -p sinksight-engine-wasm --target wasm32-unknown-unknown --locked

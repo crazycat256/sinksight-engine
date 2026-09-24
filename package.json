@@ -1,0 +1,13 @@
+{
+  "name": "@sinksight/engine",
+  "version": "0.1.4",
+  "description": "WebAssembly build of the SinkSight analysis engine.",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crazycat256/sinksight-engine"
+  },
+  "scripts": {
+    "build": "wasm-pack build crates/wasm --target web"
+  }
+}

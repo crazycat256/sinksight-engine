@@ -66,6 +66,29 @@ browser profile's `DevToolsActivePort`, and expose the output directory in the
 agent workspace. SinkSight does not own Chromium and does not add an HTTP
 service or an operator UI.
 
+## WebAssembly
+
+`crates/wasm` exposes the analysis library to JavaScript. Pushes to `main`
+publish a prebuilt package on the `wasm-package` branch:
+
+```bash
+npm install github:crazycat256/sinksight-engine#wasm-package
+```
+
+```js
+import init, { Engine } from "@sinksight/engine";
+
+await init();
+const engine = new Engine(libraryDbBytes);
+const result = engine.analyze(source);
+```
+
+Build it locally with Rust and [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/):
+
+```bash
+npm run build
+```
+
 ## License
 
 This project is licensed under the GNU General Public License v3.0 or later.

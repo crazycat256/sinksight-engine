@@ -1,0 +1,84 @@
+name: Publish prebuilt WASM to GitHub
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  publish:
+    concurrency:
+      group: wasm-package
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Read package version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "value=$VERSION" >> $GITHUB_OUTPUT
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+
+      - name: Rust tests
+        run: cargo test --workspace --locked
+
+      - name: Build WASM
+        run: wasm-pack build crates/wasm --target web
+
+      - name: Sync version, name and LICENSE into pkg
+        run: |
+          node -e "
+            const fs = require('fs');
+            const root = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
+            const pkg = JSON.parse(fs.readFileSync('crates/wasm/pkg/package.json', 'utf-8'));
+            pkg.name = root.name;
+            pkg.version = '${{ steps.version.outputs.value }}';
+            pkg.repository = root.repository;
+            pkg.license = root.license;
+            fs.writeFileSync('crates/wasm/pkg/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+          cp LICENSE crates/wasm/pkg/
+
+      - name: Prepare prebuilt WASM branch payload
+        run: |
+          set -euo pipefail
+          rm -rf wasm-package-branch
+          mkdir -p wasm-package-branch
+          cp -R crates/wasm/pkg/. wasm-package-branch/
+          rm -f wasm-package-branch/.gitignore
+          node -e "
+            const fs = require('fs');
+            const root = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
+            const path = 'wasm-package-branch/package.json';
+            const pkg = JSON.parse(fs.readFileSync(path, 'utf-8'));
+            pkg.name = root.name;
+            pkg.version = root.version;
+            pkg.repository = root.repository;
+            pkg.license = root.license;
+            fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+          "
+          cp LICENSE README.md wasm-package-branch/
+          test -f wasm-package-branch/package.json
+          test -f wasm-package-branch/sinksight_engine.js
+          test -f wasm-package-branch/sinksight_engine_bg.wasm
+
+      - name: Publish prebuilt WASM branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: wasm-package
+          publish_dir: wasm-package-branch
+          force_orphan: true
+          commit_message: Publish prebuilt WASM package ${{ steps.version.outputs.value }}

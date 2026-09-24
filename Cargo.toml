@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/analysis", "crates/collector", "crates/cli"]
+members = ["crates/analysis", "crates/collector", "crates/cli", "crates/wasm"]
 resolver = "2"
 
 [workspace.package]
@@ -12,3 +12,6 @@ repository = "https://github.com/crazycat256/sinksight-engine"
 lto = true
 codegen-units = 1
 strip = true
+
+[profile.release.package.sinksight-engine-wasm]
+opt-level = "z"
