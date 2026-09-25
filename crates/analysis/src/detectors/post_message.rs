@@ -28,7 +28,7 @@ pub fn check_call<'a>(
             if ctx
                 .semantic
                 .scoping()
-                .find_binding(scope_id, "addEventListener")
+                .find_binding(scope_id, "addEventListener".into())
                 .is_some()
             {
                 return;
@@ -92,7 +92,7 @@ pub fn check_assignment<'a>(
         if ctx
             .semantic
             .scoping()
-            .find_binding(scope_id, "onmessage")
+            .find_binding(scope_id, "onmessage".into())
             .is_some()
         {
             return;
@@ -182,7 +182,10 @@ fn arrow_or_function_body<'a>(expr: &'a Expression<'a>) -> Option<HandlerBody<'a
         Expression::FunctionExpression(f) => f.body.as_deref().map(HandlerBody::Block),
         Expression::ArrowFunctionExpression(f) => match f.get_expression() {
             Some(body_expr) => Some(HandlerBody::Expr(body_expr)),
-            None => Some(HandlerBody::Block(&f.body)),
+            None => match &f.body {
+                ArrowFunctionBody::FunctionBody(body) => Some(HandlerBody::Block(body)),
+                _ => None,
+            },
         },
         _ => None,
     }
@@ -199,7 +202,7 @@ fn extract_handler_body<'a>(
     let Expression::Identifier(ident) = handler else {
         return None;
     };
-    let symbol_id = ctx.semantic.scoping().find_binding(scope_id, &ident.name)?;
+    let symbol_id = ctx.semantic.scoping().find_binding(scope_id, ident.name)?;
     if let Some(f) = resolve_named_function(ctx, symbol_id) {
         return f.body.as_deref().map(HandlerBody::Block);
     }
@@ -233,7 +236,7 @@ fn extract_event_param<'a>(
     let Expression::Identifier(ident) = handler else {
         return None;
     };
-    let symbol_id = ctx.semantic.scoping().find_binding(scope_id, &ident.name)?;
+    let symbol_id = ctx.semantic.scoping().find_binding(scope_id, ident.name)?;
     if let Some(f) = resolve_named_function(ctx, symbol_id) {
         return first_param_name(&f.params);
     }

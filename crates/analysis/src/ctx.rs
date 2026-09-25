@@ -3,10 +3,10 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use oxc_allocator::{Allocator, Box as ArenaBox};
-use oxc_ast::ast::{Expression, IdentifierReference};
+use oxc_allocator::Allocator;
+use oxc_ast::{ast::Expression, builder::AstBuilder};
 use oxc_semantic::Semantic;
-use oxc_span::{Atom, Span};
+use oxc_span::Span;
 
 pub use oxc_semantic::{ScopeId, SymbolId};
 const DEFAULT_INFERENCE_BUDGET: usize = 250_000;
@@ -60,16 +60,12 @@ impl<'a> AnalysisCtx<'a> {
 
     /// Synthetic `undefined` identifier (e.g. missing IIFE argument).
     pub fn undefined_expr(&self) -> &'a Expression<'a> {
-        let ident = IdentifierReference {
-            span: Span::new(0, 0),
-            name: Atom::new_const("undefined"),
-            reference_id: Cell::new(None),
-        };
-        self.allocator
-            .alloc(Expression::Identifier(ArenaBox::new_in(
-                ident,
-                self.allocator,
-            )))
+        let builder = AstBuilder::new(self.allocator);
+        self.allocator.alloc(Expression::new_identifier(
+            Span::new(0, 0),
+            "undefined",
+            &builder,
+        ))
     }
 }
 

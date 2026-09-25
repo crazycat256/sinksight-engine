@@ -7,15 +7,15 @@ repository.workspace = true
 description = "DOM XSS analysis for JavaScript."
 
 [dependencies]
-oxc_allocator = "0.110.0"
-oxc_ast = "0.110.0"
-oxc_ast_visit = "0.110.0"
-oxc_parser = "0.110.0"
-oxc_semantic = "0.110.0"
-oxc_span = "0.110.0"
+oxc_allocator = "0.151.0"
+oxc_ast = "0.151.0"
+oxc_ast_visit = "0.151.0"
+oxc_parser = "0.151.0"
+oxc_semantic = "0.151.0"
+oxc_span = "0.151.0"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
-sinksight-library-hash = { version = "0.1.3", git = "https://github.com/crazycat256/sinksight-library-hash.git", rev = "3eee363a7711f7eb8fbb2627721d757724b41f34" }
+sinksight-library-hash = { version = "0.1.3", git = "https://github.com/crazycat256/sinksight-library-hash.git", rev = "b214531910825a16c912e26df29450f85b3fe6b7" }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 stacker = "0.1"

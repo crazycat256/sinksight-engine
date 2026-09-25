@@ -186,13 +186,18 @@ fn analyze_with_handle(source: &str, library_db: Option<u32>) -> AnalyzeResult {
         .with_options(options)
         .parse();
 
-    let mut analysis_errors: Vec<String> =
-        parser_ret.errors.iter().map(ToString::to_string).collect();
+    let mut analysis_errors: Vec<String> = parser_ret
+        .diagnostics
+        .iter()
+        .map(ToString::to_string)
+        .collect();
 
     let structural_hash = structural_hash_of(&parser_ret.program);
 
-    let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
-    analysis_errors.extend(semantic_ret.errors.iter().map(ToString::to_string));
+    let semantic_ret = SemanticBuilder::new()
+        .with_build_nodes(true)
+        .build(&parser_ret.program);
+    analysis_errors.extend(semantic_ret.diagnostics.iter().map(ToString::to_string));
     let ctx = AnalysisCtx::new(source, &semantic_ret.semantic, &allocator);
     let raw_matches = detect_all(&ctx);
     if ctx.inference_budget_exhausted() {

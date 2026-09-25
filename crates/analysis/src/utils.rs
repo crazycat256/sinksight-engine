@@ -194,7 +194,7 @@ pub fn is_window_like<'a>(ctx: &AnalysisCtx<'a>, expr: &Expression<'a>, scope_id
             ) && ctx
                 .semantic
                 .scoping()
-                .find_binding(scope_id, name)
+                .find_binding(scope_id, name.into())
                 .is_none()
         }
         _ => false,
@@ -208,7 +208,7 @@ pub fn is_window_like<'a>(ctx: &AnalysisCtx<'a>, expr: &Expression<'a>, scope_id
 pub fn is_unshadowed_global(ctx: &AnalysisCtx, name: &str, scope_id: ScopeId) -> bool {
     ctx.semantic
         .scoping()
-        .find_binding(scope_id, name)
+        .find_binding(scope_id, name.into())
         .is_none()
 }
 
@@ -225,7 +225,7 @@ pub fn is_global_location<'a>(
         Expression::Identifier(ident) if ident.name == "location" => ctx
             .semantic
             .scoping()
-            .find_binding(scope_id, "location")
+            .find_binding(scope_id, "location".into())
             .is_none(),
         _ => match expr.get_member_expr() {
             Some(member) if is_property_named(member, &["location"]) => {
@@ -262,7 +262,7 @@ pub fn is_browser_url_source<'a>(
             return ctx
                 .semantic
                 .scoping()
-                .find_binding(scope_id, "location")
+                .find_binding(scope_id, "location".into())
                 .is_none();
         }
     }
@@ -546,7 +546,7 @@ fn resolve_identifier_inner<'a>(
             if let Some(symbol_id) = ctx
                 .semantic
                 .scoping()
-                .find_binding(scope_id, &obj_ident.name)
+                .find_binding(scope_id, obj_ident.name)
             {
                 if let Some(Expression::ObjectExpression(obj)) = declarator_init(ctx, symbol_id) {
                     if is_safe_object_expression(obj)
@@ -612,7 +612,7 @@ fn resolve_identifier_inner<'a>(
     visited.insert(name.to_string());
 
     let scoping = ctx.semantic.scoping();
-    let Some(symbol_id) = scoping.find_binding(scope_id, name) else {
+    let Some(symbol_id) = scoping.find_binding(scope_id, name.into()) else {
         if !KNOWN_GLOBALS.contains(&name) {
             if let Some(value) = resolve_implicit_global(ctx, name) {
                 return resolve_identifier_inner(ctx, value, scope_id, visited, depth + 1);
@@ -704,7 +704,7 @@ pub fn resolve_to_object<'a>(
         return Some(obj);
     }
     if let Expression::Identifier(ident) = resolved {
-        let symbol_id = ctx.semantic.scoping().find_binding(scope_id, &ident.name)?;
+        let symbol_id = ctx.semantic.scoping().find_binding(scope_id, ident.name)?;
         if !ctx.semantic.scoping().symbol_is_mutated(symbol_id) {
             if let Some(Expression::ObjectExpression(obj)) = declarator_init(ctx, symbol_id) {
                 return Some(obj);
@@ -987,7 +987,7 @@ fn fold_to_string_literal<'a>(
             }
             let result = (|| {
                 let scoping = ctx.semantic.scoping();
-                let symbol_id = scoping.find_binding(scope_id, name)?;
+                let symbol_id = scoping.find_binding(scope_id, name.into())?;
                 let is_constant_ish = !scoping.symbol_is_mutated(symbol_id)
                     || has_only_trivial_self_assignments(ctx, symbol_id, name);
                 if !is_constant_ish {
@@ -1170,7 +1170,7 @@ pub(crate) fn resolve_named_function_param<'a>(
     let fn_name = fn_id.name.as_str();
 
     let outer_scope_id = nodes.get_node(fn_node_id).scope_id();
-    let fn_symbol_id = scoping.find_binding(outer_scope_id, fn_name)?;
+    let fn_symbol_id = scoping.find_binding(outer_scope_id, fn_name.into())?;
 
     let refs: Vec<&Reference> = scoping
         .get_resolved_references(fn_symbol_id)

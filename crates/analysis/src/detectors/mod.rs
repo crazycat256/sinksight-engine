@@ -170,16 +170,18 @@ mod tests {
             .with_options(options)
             .parse();
         assert!(
-            parser_ret.errors.is_empty(),
+            parser_ret.diagnostics.is_empty(),
             "parse errors: {:?}",
-            parser_ret.errors
+            parser_ret.diagnostics
         );
 
-        let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
+        let semantic_ret = SemanticBuilder::new()
+            .with_build_nodes(true)
+            .build(&parser_ret.program);
         assert!(
-            semantic_ret.errors.is_empty(),
+            semantic_ret.diagnostics.is_empty(),
             "semantic errors: {:?}",
-            semantic_ret.errors
+            semantic_ret.diagnostics
         );
 
         let ctx = AnalysisCtx::new(source, &semantic_ret.semantic, &allocator);
@@ -327,7 +329,9 @@ mod tests {
         let source = r#"el.innerHTML = window.name;"#;
         let source_type = SourceType::unambiguous();
         let parser_ret = Parser::new(&allocator, source, source_type).parse();
-        let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
+        let semantic_ret = SemanticBuilder::new()
+            .with_build_nodes(true)
+            .build(&parser_ret.program);
         let ctx = AnalysisCtx::new(source, &semantic_ret.semantic, &allocator);
         let matches = detect_all(&ctx);
 

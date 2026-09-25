@@ -47,7 +47,7 @@ pub fn check<'a>(
         && ctx
             .semantic
             .scoping()
-            .find_binding(scope_id, "URLSearchParams")
+            .find_binding(scope_id, "URLSearchParams".into())
             .is_none()
     {
         // `new URLSearchParams()` with no arguments creates an empty
@@ -68,7 +68,7 @@ pub fn check<'a>(
         && ctx
             .semantic
             .scoping()
-            .find_binding(scope_id, "URL")
+            .find_binding(scope_id, "URL".into())
             .is_none()
     {
         if let Some(arg) = new_expr.arguments.first().and_then(|a| a.as_expression()) {

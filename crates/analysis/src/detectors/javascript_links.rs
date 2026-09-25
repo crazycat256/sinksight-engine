@@ -112,7 +112,7 @@ fn is_location_navigation_assignment<'a>(
             && ctx
                 .semantic
                 .scoping()
-                .find_binding(scope_id, "location")
+                .find_binding(scope_id, "location".into())
                 .is_none();
     }
     if resolved_assignment_property_name(ctx, &expr.left, scope_id).as_deref() != Some("location") {
@@ -149,7 +149,7 @@ fn is_open_call<'a>(
         return ctx
             .semantic
             .scoping()
-            .find_binding(scope_id, &ident.name)
+            .find_binding(scope_id, ident.name)
             .is_none();
     }
 

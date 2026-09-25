@@ -154,6 +154,14 @@ pub(super) fn identifier_use_is_safe<'a>(
         return None;
     }
 
+    if is_parameter_binding(ctx, symbol_id) {
+        if let Some(resolution) = resolve_iife_param(ctx, symbol_id) {
+            return Some(resolution.arg.is_none_or(|arg| {
+                is_safe_expression_inner(ctx, arg, resolution.scope_id, visited)
+            }));
+        }
+    }
+
     let cache_key = (symbol_id.index(), ident.span.start, ident.span.end);
     let cacheable = visited.is_empty();
     if cacheable {
@@ -233,9 +241,7 @@ fn ident_symbol(
             return Some(symbol_id);
         }
     }
-    ctx.semantic
-        .scoping()
-        .find_binding(scope_id, ident.name.as_str())
+    ctx.semantic.scoping().find_binding(scope_id, ident.name)
 }
 
 fn refers_to_symbol(
@@ -295,7 +301,10 @@ fn callable_statements<'a>(ctx: &AnalysisCtx<'a>, node_id: NodeId) -> Option<&'a
     match ctx.semantic.nodes().kind(node_id) {
         AstKind::Program(p) => Some(p.body.as_slice()),
         AstKind::Function(f) => f.body.as_ref().map(|b| b.statements.as_slice()),
-        AstKind::ArrowFunctionExpression(a) => Some(a.body.statements.as_slice()),
+        AstKind::ArrowFunctionExpression(a) => match &a.body {
+            ArrowFunctionBody::FunctionBody(body) => Some(body.statements.as_slice()),
+            _ => None,
+        },
         AstKind::StaticBlock(b) => Some(b.body.as_slice()),
         AstKind::Class(_) => None,
         _ => None,
@@ -604,13 +613,10 @@ impl<'a, 'v> Analyzer<'a, 'v> {
                 self.exec_stmt(&w.body, fact, until_use)
             }
             Statement::LabeledStatement(ls) => self.exec_stmt(&ls.body, fact, until_use),
-            Statement::ExportNamedDeclaration(ex) => {
-                if let Some(decl) = &ex.declaration {
-                    self.exec_declaration(decl, fact, until_use)
-                } else {
-                    Outgoing::fallthrough(fact)
-                }
+            Statement::ExportDeclaration(ex) => {
+                self.exec_declaration(&ex.declaration, fact, until_use)
             }
+            Statement::ExportNamedDeclaration(_) => Outgoing::fallthrough(fact),
             Statement::ExportDefaultDeclaration(ex) => {
                 self.exec_export_default(ex, fact, until_use)
             }
@@ -1283,8 +1289,8 @@ impl<'a, 'v> Analyzer<'a, 'v> {
     }
 
     fn exec_class(&mut self, class: &'a Class<'a>, mut fact: Fact, until_use: bool) -> Outgoing {
-        if let Some(sup) = &class.super_class {
-            let out = self.exec_expr(sup, fact, until_use);
+        if let Some(sup) = &class.heritage {
+            let out = self.exec_expr(&sup.expression, fact, until_use);
             if out.found.is_some() {
                 return out;
             }
@@ -1378,7 +1384,8 @@ impl<'a, 'v> Analyzer<'a, 'v> {
             | Expression::StringLiteral(_)
             | Expression::ThisExpression(_)
             | Expression::Super(_)
-            | Expression::MetaProperty(_)
+            | Expression::ImportMeta(_)
+            | Expression::NewTarget(_)
             | Expression::FunctionExpression(_)
             | Expression::ArrowFunctionExpression(_)
             | Expression::JSXElement(_)
@@ -1706,14 +1713,22 @@ impl<'a, 'v> Analyzer<'a, 'v> {
     }
 
     fn exec_iife(&mut self, func: CalleeFn<'a>, fact: Fact, until_use: bool) -> Outgoing {
-        let body = match func {
+        let mut out = match func {
             CalleeFn::Fn(f) => match &f.body {
-                Some(body) => body,
+                Some(body) => self.exec_list(&body.statements, fact, until_use),
                 None => return Outgoing::fallthrough(fact),
             },
-            CalleeFn::Arrow(f) => &f.body,
+            CalleeFn::Arrow(f) => match &f.body {
+                ArrowFunctionBody::FunctionBody(body) => {
+                    self.exec_list(&body.statements, fact, until_use)
+                }
+                _ => self.exec_expr(
+                    f.get_expression().expect("expression arrow body"),
+                    fact,
+                    until_use,
+                ),
+            },
         };
-        let mut out = self.exec_list(&body.statements, fact, until_use);
         out.next = join_opt(out.next, out.stops);
         out.stops = None;
         out.breaks.clear();

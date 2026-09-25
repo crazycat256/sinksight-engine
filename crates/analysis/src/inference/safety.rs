@@ -195,7 +195,7 @@ pub(crate) fn all_assignments_safe<'a>(
     visited.insert(key);
 
     let scoping = ctx.semantic.scoping();
-    let Some(symbol_id) = scoping.find_binding(scope_id, name) else {
+    let Some(symbol_id) = scoping.find_binding(scope_id, name.into()) else {
         return false;
     };
 
@@ -283,7 +283,12 @@ fn is_call_safe<'a>(
         if let Some(body_expr) = f.get_expression() {
             return is_safe_expression_inner(ctx, body_expr, inner_scope_id, visited);
         }
-        return is_iife_body_safe(ctx, &f.body, inner_scope_id, visited);
+        return match &f.body {
+            ArrowFunctionBody::FunctionBody(body) => {
+                is_iife_body_safe(ctx, body, inner_scope_id, visited)
+            }
+            _ => false,
+        };
     }
     if let Expression::FunctionExpression(f) = callee {
         let Some(body) = &f.body else { return false };

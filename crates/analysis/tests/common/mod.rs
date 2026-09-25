@@ -27,16 +27,18 @@ pub fn with_ctx_and_program<R>(source: &str, f: impl FnOnce(&AnalysisCtx, &Progr
         .with_options(options)
         .parse();
     assert!(
-        parser_ret.errors.is_empty(),
+        parser_ret.diagnostics.is_empty(),
         "parse errors for {source:?}: {:?}",
-        parser_ret.errors
+        parser_ret.diagnostics
     );
 
-    let semantic_ret = SemanticBuilder::new().build(&parser_ret.program);
+    let semantic_ret = SemanticBuilder::new()
+        .with_build_nodes(true)
+        .build(&parser_ret.program);
     assert!(
-        semantic_ret.errors.is_empty(),
+        semantic_ret.diagnostics.is_empty(),
         "semantic errors for {source:?}: {:?}",
-        semantic_ret.errors
+        semantic_ret.diagnostics
     );
 
     let ctx = AnalysisCtx::new(source, &semantic_ret.semantic, &allocator);

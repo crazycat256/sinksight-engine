@@ -57,7 +57,7 @@ fn infer_type_inner<'a>(
     if let Expression::Identifier(ident) = resolved {
         let name = ident.name.as_str();
         let scoping = ctx.semantic.scoping();
-        let has_binding = scoping.find_binding(scope_id, name).is_some();
+        let has_binding = scoping.find_binding(scope_id, name.into()).is_some();
         if name == "undefined" {
             return InferredType::UNDEFINED;
         }
@@ -328,7 +328,7 @@ fn infer_type_from_property_usages(
 ) -> InferredType {
     let scoping = ctx.semantic.scoping();
     let nodes = ctx.semantic.nodes();
-    let Some(symbol_id) = scoping.find_binding(scope_id, name) else {
+    let Some(symbol_id) = scoping.find_binding(scope_id, name.into()) else {
         return InferredType::UNKNOWN;
     };
 

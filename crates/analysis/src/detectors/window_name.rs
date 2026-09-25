@@ -43,7 +43,7 @@ pub fn check_member<'a>(
     if ctx
         .semantic
         .scoping()
-        .find_binding(scope_id, obj_name)
+        .find_binding(scope_id, obj_name.into())
         .is_some()
     {
         return;
@@ -74,7 +74,7 @@ pub fn check_identifier<'a>(
     if ctx
         .semantic
         .scoping()
-        .find_binding(scope_id, "name")
+        .find_binding(scope_id, "name".into())
         .is_some()
     {
         return;
