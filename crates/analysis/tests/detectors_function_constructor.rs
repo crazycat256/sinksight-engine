@@ -89,3 +89,8 @@ fn detects_function_constructor_aliased_from_window() {
     "#;
     assert_eq!(count_detector(code, D), 1);
 }
+
+#[test]
+fn detects_indirect_function_sequence() {
+    assert_eq!(count_detector("(0, Function)(userInput)", D), 1);
+}

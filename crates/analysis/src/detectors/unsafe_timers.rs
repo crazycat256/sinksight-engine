@@ -2,7 +2,7 @@ use oxc_ast::ast::{CallExpression, Expression};
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
 use crate::inference::{infer_type, is_safe_expression};
-use crate::utils::{matches_callee_names, resolve_identifier};
+use crate::utils::{callee_resolution_candidate, matches_callee_names, resolve_identifier};
 
 const TIMER_NAMES: &[&str] = &["setTimeout", "setInterval"];
 
@@ -49,9 +49,8 @@ fn is_timer_callee<'a>(
     if matches_callee_names(callee, TIMER_NAMES) {
         return true;
     }
-    let resolved = resolve_identifier(ctx, callee, scope_id);
-    if !std::ptr::eq(resolved, callee) {
-        return matches_callee_names(resolved, TIMER_NAMES);
-    }
-    false
+    let Some(candidate) = callee_resolution_candidate(callee) else {
+        return false;
+    };
+    matches_callee_names(resolve_identifier(ctx, candidate, scope_id), TIMER_NAMES)
 }

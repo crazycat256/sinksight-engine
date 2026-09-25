@@ -135,6 +135,20 @@ pub fn matches_callee_names(callee: &Expression, targets: &[&str]) -> bool {
     }
 }
 
+pub fn callee_resolution_candidate<'a>(expr: &'a Expression<'a>) -> Option<&'a Expression<'a>> {
+    match unwrap_expression(expr) {
+        expression @ Expression::Identifier(_) => Some(expression),
+        Expression::SequenceExpression(sequence) => sequence
+            .expressions
+            .last()
+            .and_then(callee_resolution_candidate),
+        Expression::AssignmentExpression(assignment) => {
+            callee_resolution_candidate(&assignment.right)
+        }
+        _ => None,
+    }
+}
+
 /// Strips parentheses and TypeScript type-wrapper nodes.
 /// oxc is normally parsed with `preserve_parens: false` (see
 /// `sinksight_analysis::parse`), so `ParenthesizedExpression` should not
@@ -888,12 +902,7 @@ fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<Hash
                     if depth > 1 {
                         return None;
                     }
-                    match prop_name_at_depth_1 {
-                        Some(name) => {
-                            mutated.insert(name);
-                        }
-                        None => return None,
-                    }
+                    mutated.insert(prop_name_at_depth_1?);
                 }
             }
             AstKind::NewExpression(new_expr) => {
@@ -905,12 +914,7 @@ fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<Hash
                     if depth > 1 {
                         return None;
                     }
-                    match prop_name_at_depth_1 {
-                        Some(name) => {
-                            mutated.insert(name);
-                        }
-                        None => return None,
-                    }
+                    mutated.insert(prop_name_at_depth_1?);
                 }
             }
             _ => {

@@ -2,7 +2,7 @@ use oxc_ast::ast::{Argument, CallExpression, Expression, NewExpression};
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
 use crate::inference::is_safe_expression;
-use crate::utils::{matches_callee_names, resolve_identifier};
+use crate::utils::{callee_resolution_candidate, matches_callee_names, resolve_identifier};
 
 const FUNCTION_NAMES: &[&str] = &["Function"];
 
@@ -48,11 +48,10 @@ fn is_function_reference<'a>(
     if matches_callee_names(callee, FUNCTION_NAMES) {
         return true;
     }
-    let resolved = resolve_identifier(ctx, callee, scope_id);
-    if !std::ptr::eq(resolved, callee) {
-        return matches_callee_names(resolved, FUNCTION_NAMES);
-    }
-    false
+    let Some(candidate) = callee_resolution_candidate(callee) else {
+        return false;
+    };
+    matches_callee_names(resolve_identifier(ctx, candidate, scope_id), FUNCTION_NAMES)
 }
 
 fn has_dynamic_function_arguments<'a>(

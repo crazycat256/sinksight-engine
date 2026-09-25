@@ -2,7 +2,10 @@ use oxc_ast::ast::{CallExpression, Expression};
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
 use crate::inference::is_safe_expression;
-use crate::utils::{matches_callee_names, resolve_identifier, resolved_member_property_name};
+use crate::utils::{
+    callee_resolution_candidate, matches_callee_names, resolve_identifier,
+    resolved_member_property_name,
+};
 
 pub fn check<'a>(
     ctx: &AnalysisCtx<'a>,
@@ -33,8 +36,11 @@ fn is_eval_callee<'a>(
     if callee_property_is_eval(ctx, callee, scope_id) {
         return true;
     }
-    let resolved = resolve_identifier(ctx, callee, scope_id);
-    !std::ptr::eq(resolved, callee) && callee_property_is_eval(ctx, resolved, scope_id)
+    let Some(candidate) = callee_resolution_candidate(callee) else {
+        return false;
+    };
+    let resolved = resolve_identifier(ctx, candidate, scope_id);
+    callee_property_is_eval(ctx, resolved, scope_id)
 }
 
 fn callee_property_is_eval<'a>(

@@ -85,3 +85,11 @@ fn ignores_function_expression_with_dynamic_body() {
     "#;
     assert_eq!(count_detector(code, D), 0);
 }
+
+#[test]
+fn detects_indirect_timer_sequence() {
+    assert_eq!(
+        count_detector("(0, setTimeout)('prefix:' + payload, 0)", D),
+        1
+    );
+}

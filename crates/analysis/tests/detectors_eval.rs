@@ -88,3 +88,8 @@ fn detects_eval_via_concatenated_const_variables() {
 fn ignores_computed_window_call_with_unknown_key() {
     assert_eq!(count_detector("window[userInput](code)", D), 0);
 }
+
+#[test]
+fn detects_indirect_eval_sequence() {
+    assert_eq!(count_detector("(0, eval)(userInput)", D), 1);
+}
