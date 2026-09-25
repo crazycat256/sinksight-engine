@@ -3,7 +3,9 @@ use std::collections::HashSet;
 use oxc_ast::ast::*;
 
 use crate::ctx::{AnalysisCtx, Category, RawMatch, ScopeId};
-use crate::inference::{attribute_sink_kind, infer_element_type, infer_type, AttributeSinkKind};
+use crate::inference::{
+    attribute_sink_kind, could_be_attribute_sink, infer_element_type, infer_type, AttributeSinkKind,
+};
 use crate::utils::{
     assignment_target_object, has_safe_url_prefix, is_browser_url_source, is_property_named,
     is_static_string_expression, matches_callee_names, resolve_identifier,
@@ -37,6 +39,9 @@ pub fn check_assignment<'a>(
     let Some(prop_name) = resolved_assignment_property_name(ctx, &expr.left, scope_id) else {
         return;
     };
+    if !could_be_attribute_sink(&prop_name, AttributeSinkKind::JavascriptUri) {
+        return;
+    }
     let Some(obj) = assignment_target_object(&expr.left) else {
         return;
     };
@@ -65,6 +70,9 @@ pub fn check_call<'a>(
     out: &mut Vec<RawMatch>,
 ) {
     if let Some((object, name, value)) = set_attribute_write(call) {
+        if !could_be_attribute_sink(name, AttributeSinkKind::JavascriptUri) {
+            return;
+        }
         let tag = infer_element_type(ctx, object, scope_id);
         if attribute_sink_kind(tag.as_deref(), name) == Some(AttributeSinkKind::JavascriptUri)
             && is_suspicious_value(ctx, value, scope_id)

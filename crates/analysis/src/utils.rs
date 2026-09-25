@@ -1,6 +1,7 @@
 //! Identifier resolution and shared AST helpers.
 
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use oxc_ast::ast::*;
 use oxc_ast::AstKind;
@@ -801,7 +802,20 @@ pub(crate) fn is_parameter_binding(ctx: &AnalysisCtx, symbol_id: SymbolId) -> bo
 /// chain of nested closures. This trades a small amount of precision for
 /// avoiding a potentially expensive unbounded walk; it never *under*-reports
 /// mutation (i.e. it stays sound, at worst slightly more conservative).
-fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<HashSet<String>> {
+fn get_mutated_properties(ctx: &AnalysisCtx, symbol_id: SymbolId) -> Option<Rc<HashSet<String>>> {
+    if let Some(cached) = ctx.cached_mutated_properties(symbol_id) {
+        return cached;
+    }
+
+    let properties = get_mutated_properties_uncached(ctx, symbol_id).map(Rc::new);
+    ctx.cache_mutated_properties(symbol_id, properties.clone());
+    properties
+}
+
+fn get_mutated_properties_uncached(
+    ctx: &AnalysisCtx,
+    symbol_id: SymbolId,
+) -> Option<HashSet<String>> {
     let scoping = ctx.semantic.scoping();
     let nodes = ctx.semantic.nodes();
     let mut mutated = HashSet::new();
@@ -1067,6 +1081,19 @@ fn reference_escapes_into_opaque_call(
 
 /// Checks whether a binding only has trivial self-assignments.
 fn has_only_trivial_self_assignments(ctx: &AnalysisCtx, symbol_id: SymbolId, name: &str) -> bool {
+    if let Some(cached) = ctx.cached_trivial_self_assignments(symbol_id) {
+        return cached;
+    }
+    let result = has_only_trivial_self_assignments_uncached(ctx, symbol_id, name);
+    ctx.cache_trivial_self_assignments(symbol_id, result);
+    result
+}
+
+fn has_only_trivial_self_assignments_uncached(
+    ctx: &AnalysisCtx,
+    symbol_id: SymbolId,
+    name: &str,
+) -> bool {
     let scoping = ctx.semantic.scoping();
     let nodes = ctx.semantic.nodes();
     let mut has_any = false;

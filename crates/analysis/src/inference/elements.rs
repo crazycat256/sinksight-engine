@@ -15,6 +15,31 @@ pub fn infer_element_type<'a>(
     expr: &'a Expression<'a>,
     scope_id: ScopeId,
 ) -> Option<ElementTag> {
+    let symbol_id = match expr {
+        Expression::Identifier(identifier) => ctx
+            .semantic
+            .scoping()
+            .find_binding(scope_id, identifier.name),
+        _ => None,
+    };
+    if let Some(symbol_id) = symbol_id {
+        if let Some(cached) = ctx.cached_element_type(symbol_id) {
+            return cached;
+        }
+    }
+
+    let element_type = infer_element_type_uncached(ctx, expr, scope_id);
+    if let Some(symbol_id) = symbol_id {
+        ctx.cache_element_type(symbol_id, element_type.clone());
+    }
+    element_type
+}
+
+fn infer_element_type_uncached<'a>(
+    ctx: &AnalysisCtx<'a>,
+    expr: &'a Expression<'a>,
+    scope_id: ScopeId,
+) -> Option<ElementTag> {
     let resolved = resolve_identifier(ctx, expr, scope_id);
 
     if let Expression::NewExpression(new_expr) = resolved {
@@ -129,6 +154,23 @@ pub fn is_dangerous_attribute(element_tag: Option<&str>, attribute_name: &str) -
 
 /// Classifies a DOM attribute write for detectors. `ping` is in the
 /// dangerous-attribute matrix but is not an XSS sink, so it is omitted here.
+pub fn could_be_attribute_sink(attribute_name: &str, kind: AttributeSinkKind) -> bool {
+    match kind {
+        AttributeSinkKind::HtmlInjection => {
+            attribute_name.eq_ignore_ascii_case("srcdoc")
+                || attribute_name
+                    .get(..2)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
+        }
+        AttributeSinkKind::JavascriptUri => ["href", "xlink:href", "action", "formaction", "src"]
+            .iter()
+            .any(|name| attribute_name.eq_ignore_ascii_case(name)),
+        AttributeSinkKind::ResourceUrl => ["src", "data"]
+            .iter()
+            .any(|name| attribute_name.eq_ignore_ascii_case(name)),
+    }
+}
+
 pub fn attribute_sink_kind(
     element_tag: Option<&str>,
     attribute_name: &str,
