@@ -83,6 +83,27 @@ const D3: Target = Target {
     ],
 };
 
+const ECHARTS: Target = Target {
+    name: "echarts.js",
+    url: "https://unpkg.com/echarts@5.5.1/dist/echarts.js",
+    sri: "sha256-rUhV2kUT/gNqBo/w32+YBUuBscEeTKIc5SL9glB9AXs=",
+    expected_findings: &[
+        ef!("documentWrite", 72592, 14),
+        ef!("documentWrite", 72602, 12),
+        ef!("functionConstructor", 47512, 107),
+        ef!("javascriptLinks", 16610, 8),
+        ef!("javascriptLinks", 16612, 8),
+        ef!("javascriptLinks", 72552, 10),
+        ef!("unsafeHtml", 26754, 12),
+        ef!("unsafeHtml", 73021, 8),
+        ef!("unsafeHtml", 73033, 12),
+        ef!("unsafeHtml", 73092, 8),
+        ef!("unsafeHtml", 73093, 8),
+        ef!("unsafeHtml", 74166, 10),
+        ef!("unsafeHtml", 74183, 12),
+    ],
+};
+
 const HTMX: Target = Target {
     name: "htmx.min.js",
     url: "https://unpkg.com/htmx.org@1.9.10/dist/htmx.min.js",
@@ -119,6 +140,78 @@ const LODASH: Target = Target {
     url: "https://unpkg.com/lodash@4.17.21/lodash.min.js",
     sri: "sha256-qXBd/EfAdjOA2FGrGAG+b3YBn2tn5A6bhz+LSgYD96k=",
     expected_findings: &[ef!("functionConstructor", 105, 27)],
+};
+
+const MERMAID: Target = Target {
+    name: "mermaid.js",
+    url: "https://unpkg.com/mermaid@11.4.1/dist/mermaid.js",
+    sri: "sha256-/S3+BiburO2wORBQIe1KsOor8bPJR0L2fetVlxkLQnM=",
+    expected_findings: &[
+        ef!("eval", 61643, 4),
+        ef!("javascriptLinks", 11100, 10),
+        ef!("javascriptLinks", 16864, 10),
+        ef!("javascriptLinks", 66308, 10),
+        ef!("javascriptLinks", 66314, 10),
+        ef!("javascriptLinks", 66324, 10),
+        ef!("javascriptLinks", 66340, 10),
+        ef!("javascriptLinks", 67528, 12),
+        ef!("javascriptLinks", 80624, 14),
+        ef!("javascriptLinks", 81044, 14),
+        ef!("resourceUrl", 11128, 10),
+        ef!("resourceUrl", 17189, 10),
+        ef!("resourceUrl", 35033, 16),
+        ef!("resourceUrl", 35075, 16),
+        ef!("resourceUrl", 35115, 16),
+        ef!("resourceUrl", 35130, 16),
+        ef!("unsafeHtml", 6460, 10),
+        ef!("unsafeHtml", 21719, 8),
+        ef!("unsafeHtml", 24032, 6),
+        ef!("unsafeHtml", 24038, 6),
+        ef!("unsafeHtml", 146951, 4),
+        ef!("unsafeHtml", 147120, 8),
+    ],
+};
+
+const MONACO: Target = Target {
+    name: "monaco-editor.js",
+    url: "https://unpkg.com/monaco-editor@0.52.2/min/vs/editor/editor.main.js",
+    sri: "sha256-kLWIvAtiTiQFKlduG8qy6v/se8ZmiVGIhi7r2cl0V4I=",
+    expected_findings: &[
+        ef!("insertAdjacentHtml", 606, 88602),
+        ef!("insertAdjacentHtml", 665, 12632),
+        ef!("insertAdjacentHtml", 665, 12861),
+        ef!("javascriptLinks", 6, 43947),
+        ef!("javascriptLinks", 111, 147522),
+        ef!("javascriptLinks", 120, 28742),
+        ef!("javascriptLinks", 120, 29168),
+        ef!("javascriptLinks", 121, 3098),
+        ef!("javascriptLinks", 122, 94112),
+        ef!("javascriptLinks", 122, 95032),
+        ef!("javascriptLinks", 163, 54589),
+        ef!("javascriptLinks", 216, 4960),
+        ef!("javascriptLinks", 635, 3803),
+        ef!("javascriptLinks", 722, 45517),
+        ef!("javascriptLinks", 722, 99512),
+        ef!("postMessage", 122, 4945),
+        ef!("postMessage", 601, 35200),
+        ef!("resourceUrl", 40, 10),
+        ef!("resourceUrl", 42, 9),
+        ef!("resourceUrl", 44, 33),
+        ef!("resourceUrl", 46, 33),
+        ef!("resourceUrl", 216, 4404),
+        ef!("unsafeHtml", 6, 60204),
+        ef!("unsafeHtml", 216, 4982),
+        ef!("unsafeHtml", 234, 3975),
+        ef!("unsafeHtml", 606, 80173),
+        ef!("unsafeHtml", 606, 88576),
+        ef!("unsafeHtml", 606, 88884),
+        ef!("unsafeHtml", 616, 40649),
+        ef!("unsafeHtml", 622, 26420),
+        ef!("unsafeHtml", 623, 5309),
+        ef!("unsafeHtml", 636, 24689),
+        ef!("unsafeHtml", 721, 46642),
+        ef!("urlParams", 601, 33837),
+    ],
 };
 
 const PDF: Target = Target {
@@ -298,6 +391,11 @@ fn d3_min_js() {
 }
 
 #[test]
+fn echarts_js() {
+    run_target(&ECHARTS);
+}
+
+#[test]
 fn htmx_min_js() {
     run_target(&HTMX);
 }
@@ -310,6 +408,16 @@ fn jquery_min_js() {
 #[test]
 fn lodash_min_js() {
     run_target(&LODASH);
+}
+
+#[test]
+fn mermaid_js() {
+    run_target(&MERMAID);
+}
+
+#[test]
+fn monaco_editor_js() {
+    run_target(&MONACO);
 }
 
 #[test]
