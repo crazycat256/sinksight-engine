@@ -2,6 +2,7 @@
 name = "sinksight-engine-wasm"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "WebAssembly bindings for the SinkSight analysis engine."

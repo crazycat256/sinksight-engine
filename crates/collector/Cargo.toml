@@ -2,6 +2,7 @@
 name = "sinksight-collector"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Continuous JavaScript collection through Chrome DevTools Protocol."
