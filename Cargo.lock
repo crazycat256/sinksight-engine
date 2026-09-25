@@ -1357,7 +1357,7 @@ dependencies = [
 
 [[package]]
 name = "sinksight-analysis"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "oxc_allocator",
  "oxc_ast",
@@ -1375,7 +1375,7 @@ dependencies = [
 
 [[package]]
 name = "sinksight-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "sinksight-collector"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "base64",
@@ -1405,7 +1405,7 @@ dependencies = [
 
 [[package]]
 name = "sinksight-engine-wasm"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde-wasm-bindgen",
