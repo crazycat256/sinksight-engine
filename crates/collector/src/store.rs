@@ -640,3 +640,33 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
         .with_context(|| format!("failed to replace {}", path.display()))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::source_context;
+
+    #[test]
+    fn source_context_is_bounded_around_a_minified_finding() {
+        let context = source_context("aaaTARGETbbb", 3, 9, 2).unwrap();
+
+        assert_eq!(context.source, "aaTARGETbb");
+        assert_eq!(context.finding_start, 2);
+        assert_eq!(context.finding_end, 8);
+        assert!(context.truncated_before);
+        assert!(context.truncated_after);
+    }
+
+    #[test]
+    fn source_context_counts_unicode_characters_without_splitting_them() {
+        let source = "é🙂TARGET終x";
+        let start = "é🙂".len();
+        let end = start + "TARGET".len();
+        let context = source_context(source, start, end, 1).unwrap();
+
+        assert_eq!(context.source, "🙂TARGET終");
+        assert_eq!(context.finding_start, 1);
+        assert_eq!(context.finding_end, 7);
+        assert!(context.truncated_before);
+        assert!(context.truncated_after);
+    }
+}

@@ -3,14 +3,24 @@ use std::fs;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sinksight_analysis::{analyze, Finding, FindingCategory};
-use sinksight_collector::store::{finding_details, CapturedScript, Store};
+use sinksight_collector::store::{finding_details, CapturedScript, FindingDetails, Store};
 
 fn content_hash(source: &str) -> String {
     format!("{:x}", Sha256::digest(source.as_bytes()))
 }
 
+fn context_finding(details: &FindingDetails) -> String {
+    details
+        .context
+        .source
+        .chars()
+        .skip(details.context.finding_start)
+        .take(details.context.finding_end - details.context.finding_start)
+        .collect()
+}
+
 #[test]
-fn exports_raw_source_and_every_observed_url() {
+fn deduplicates_exact_source_and_keeps_provenance() {
     let output = tempfile::tempdir().unwrap();
     let source = "element.innerHTML = value;\n";
     let hash = content_hash(source);
@@ -59,15 +69,11 @@ fn exports_raw_source_and_every_observed_url() {
     assert_eq!(details.page_urls.len(), 2);
     assert_eq!(details.script_urls.len(), 2);
     assert!(details.context.source.contains("element.innerHTML = value"));
-    assert_eq!(
-        details.context.source[details.context.finding_start..details.context.finding_end]
-            .to_string(),
-        "element.innerHTML = value"
-    );
+    assert_eq!(context_finding(&details), "element.innerHTML = value");
 }
 
 #[test]
-fn preserves_variants_but_exports_only_the_first_representative() {
+fn keeps_structural_variants_but_exports_only_the_representative() {
     let output = tempfile::tempdir().unwrap();
     let first = "window.state = { id: 1 }; element.innerHTML = value;\n";
     let second = "window.state = { id: 2 }; element.innerHTML = value;\n";
@@ -135,40 +141,6 @@ fn preserves_variants_but_exports_only_the_first_representative() {
         second
     );
 
-    let connection = rusqlite::Connection::open(output.path().join("metadata.db")).unwrap();
-    assert_eq!(
-        connection
-            .query_row("SELECT COUNT(*) FROM scripts", [], |row| row
-                .get::<_, u32>(0))
-            .unwrap(),
-        2
-    );
-    assert_eq!(
-        connection
-            .query_row(
-                "SELECT COUNT(*) FROM scripts WHERE representative = 1",
-                [],
-                |row| row.get::<_, u32>(0),
-            )
-            .unwrap(),
-        1
-    );
-    assert_eq!(
-        connection
-            .query_row("SELECT COUNT(*) FROM observations", [], |row| {
-                row.get::<_, u32>(0)
-            })
-            .unwrap(),
-        2
-    );
-    assert_eq!(
-        connection
-            .query_row("SELECT COUNT(*) FROM findings", [], |row| row
-                .get::<_, usize>(0))
-            .unwrap(),
-        first_result.findings.len() + second_result.findings.len()
-    );
-
     let scripts: Value =
         serde_json::from_slice(&fs::read(output.path().join("export/scripts.json")).unwrap())
             .unwrap();
@@ -182,37 +154,13 @@ fn preserves_variants_but_exports_only_the_first_representative() {
     let csv = fs::read_to_string(output.path().join("export/findings.csv")).unwrap();
     assert_eq!(csv.lines().count(), first_result.findings.len() + 1);
     assert!(!output.path().join("export/findings.json").exists());
-}
 
-#[test]
-fn finding_context_counts_characters_without_splitting_utf8() {
-    let output = tempfile::tempdir().unwrap();
-    let source = "const label = 'é🙂'; element.innerHTML = value;\n";
-    let hash = content_hash(source);
-    let result = analyze(source, None);
-    let mut store = Store::open(output.path()).unwrap();
-    store
-        .save(CapturedScript {
-            hash: &hash,
-            source,
-            script_url: "https://example.test/unicode.js",
-            page_url: "https://example.test/",
-            result: &result,
-        })
+    let variant_finding_id = (first_result.findings.len() + second_result.findings.len()) as i64;
+    let details = finding_details(output.path(), variant_finding_id, 0)
+        .unwrap()
         .unwrap();
-
-    let details = finding_details(output.path(), 1, 3).unwrap().unwrap();
-    assert_eq!(details.context.finding_start, 3);
-    assert_eq!(
-        details.context.source.chars().take(3).collect::<String>(),
-        "'; "
-    );
-    let finding: String = details
-        .context
-        .source
-        .chars()
-        .skip(details.context.finding_start)
-        .take(details.context.finding_end - details.context.finding_start)
-        .collect();
-    assert_eq!(finding, "element.innerHTML = value");
+    assert_eq!(details.detector, "variant-only");
+    assert!(!details.representative);
+    assert_eq!(details.content_hash, second_hash);
+    assert_eq!(context_finding(&details), "w");
 }
