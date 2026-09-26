@@ -45,22 +45,33 @@ disconnects. Pass `--verbose-source-errors` to print every failure.
 sinksight analyze file.js --library-db /path/to/libraries.slhdb
 ```
 
+Use `finding` with an ID from `export/findings.csv` to retrieve its exact
+source context, structural family, and observed URLs without loading the full
+database or every source into the prompt:
+
+```text
+sinksight finding 42 --output /work/sinksight
+```
+
+The command shows 500 source characters on either side of the finding and at
+most ten page and script URLs by default. Use `--context-chars`, `--all-urls`,
+or `--json` when more context or structured output is needed.
+
 ## Output
 
 - `variants/<structural-hash>/<sha256>.js`: every distinct JavaScript capture,
   stored verbatim and grouped by structural family. Sources that could not be
   structurally hashed are stored under `variants/unstructured/`.
 - `export/findings.csv`: compact list intended for quick agent inspection.
-- `export/findings.json`: the same findings as structured data.
 - `export/origins.json`: mapping from saved scripts to pages that loaded them.
 - `export/scripts.json`: script metadata and detected library versions.
 - `metadata.db`: durable deduplication and observation state.
 
 Exports are replaced atomically. An agent can therefore read them while the
 collector is running. Exact SHA-256 matches avoid repeated analysis. The first
-stored capture in each structural family remains its exported representative, while
-the database and `variants/` retain every exact source, observation, analysis
-result, and finding. Variant findings are not included in the exports.
+stored capture in each structural family remains its exported representative,
+while the database and `variants/` retain every exact source, observation,
+analysis result, and finding. Variant findings are not included in the exports.
 `export/scripts.json` reports the number of variants, variants whose normalized
 findings differ from the representative, and variant analysis errors.
 

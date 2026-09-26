@@ -51,6 +51,8 @@ pub enum FindingCategory {
 pub struct Finding {
     pub detector_name: String,
     pub category: FindingCategory,
+    pub start_offset: u32,
+    pub end_offset: u32,
     pub start_line: u32,
     pub start_column: u32,
     pub end_line: u32,
@@ -101,6 +103,8 @@ impl From<sinksight_analysis::Finding> for Finding {
                 AnalysisCategory::Sink => FindingCategory::Sink,
                 AnalysisCategory::Input => FindingCategory::Input,
             },
+            start_offset: value.start_offset,
+            end_offset: value.end_offset,
             start_line: value.start_line,
             start_column: value.start_column,
             end_line: value.end_line,

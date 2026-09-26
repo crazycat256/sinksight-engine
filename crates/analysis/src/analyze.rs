@@ -45,6 +45,8 @@ impl Analyzer {
 pub struct Finding {
     pub detector_name: String,
     pub category: FindingCategory,
+    pub start_offset: u32,
+    pub end_offset: u32,
     pub start_line: u32,
     pub start_column: u32,
     pub end_line: u32,
@@ -249,6 +251,8 @@ fn raw_match_to_finding(source: &str, line_index: &LineIndex, m: RawMatch) -> Fi
     Finding {
         detector_name: m.detector.to_string(),
         category: m.category.into(),
+        start_offset: m.span.start,
+        end_offset: m.span.end,
         start_line,
         start_column,
         end_line,

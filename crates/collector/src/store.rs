@@ -3,9 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use csv::WriterBuilder;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
 use sinksight_analysis::AnalyzeResult;
 type UrlIndex = BTreeMap<String, Vec<String>>;
@@ -20,6 +20,110 @@ pub struct CapturedScript<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FindingDetails {
+    pub id: i64,
+    pub detector: String,
+    pub category: String,
+    pub file: String,
+    pub location: String,
+    pub snippet: String,
+    pub structural_hash: String,
+    pub content_hash: String,
+    pub representative: bool,
+    pub variant_count: usize,
+    pub page_urls: Vec<String>,
+    pub script_urls: Vec<String>,
+    pub context: FindingContext,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingContext {
+    pub source: String,
+    pub finding_start: usize,
+    pub finding_end: usize,
+    pub truncated_before: bool,
+    pub truncated_after: bool,
+}
+
+pub fn finding_details(
+    output: &Path,
+    id: i64,
+    context_chars: usize,
+) -> Result<Option<FindingDetails>> {
+    let connection = Connection::open_with_flags(
+        output.join("metadata.db"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("cannot open {}/metadata.db", output.display()))?;
+    let row = connection
+        .query_row(
+            "SELECT f.detector, f.category, f.start_offset, f.end_offset,
+                    f.start_line, f.start_column, f.end_line, f.end_column, f.snippet,
+                    s.hash, s.structural_hash, s.path, s.source, s.representative
+             FROM findings f JOIN scripts s ON s.hash = f.hash
+             WHERE f.id = ?1",
+            [id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, usize>(2)?,
+                    row.get::<_, usize>(3)?,
+                    row.get::<_, u32>(4)?,
+                    row.get::<_, u32>(5)?,
+                    row.get::<_, u32>(6)?,
+                    row.get::<_, u32>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, bool>(13)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((
+        detector,
+        category,
+        start_offset,
+        end_offset,
+        start_line,
+        start_column,
+        end_line,
+        end_column,
+        snippet,
+        content_hash,
+        structural_hash,
+        file,
+        source,
+        representative,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    let variant_count = family_variant_count(&connection, &structural_hash, &content_hash)?;
+    let page_urls = family_urls(&connection, &structural_hash, &content_hash, "page_url")?;
+    let script_urls = family_urls(&connection, &structural_hash, &content_hash, "script_url")?;
+    let context = source_context(&source, start_offset, end_offset, context_chars)?;
+    Ok(Some(FindingDetails {
+        id,
+        detector,
+        category,
+        file,
+        location: format!("L{start_line}:{start_column}-L{end_line}:{end_column}"),
+        snippet,
+        structural_hash,
+        content_hash,
+        representative,
+        variant_count,
+        page_urls,
+        script_urls,
+        context,
+    }))
+}
+
 struct ExportFinding {
     id: i64,
     file: String,
@@ -27,8 +131,6 @@ struct ExportFinding {
     detector: String,
     category: String,
     snippet: String,
-    script_urls: Vec<String>,
-    page_urls: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -79,6 +181,8 @@ impl Store {
                  hash TEXT NOT NULL REFERENCES scripts(hash) ON DELETE CASCADE,
                  detector TEXT NOT NULL,
                  category TEXT NOT NULL,
+                 start_offset INTEGER NOT NULL,
+                 end_offset INTEGER NOT NULL,
                  start_line INTEGER NOT NULL,
                  start_column INTEGER NOT NULL,
                  end_line INTEGER NOT NULL,
@@ -171,12 +275,15 @@ impl Store {
         for finding in &captured.result.findings {
             transaction.execute(
                 "INSERT INTO findings
-                 (hash, detector, category, start_line, start_column, end_line, end_column, snippet)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (hash, detector, category, start_offset, end_offset,
+                  start_line, start_column, end_line, end_column, snippet)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     captured.hash,
                     finding.detector_name,
                     format!("{:?}", finding.category).to_ascii_lowercase(),
+                    finding.start_offset,
+                    finding.end_offset,
                     finding.start_line,
                     finding.start_column,
                     finding.end_line,
@@ -192,8 +299,7 @@ impl Store {
     pub fn export(&self) -> Result<()> {
         let (page_urls_by_family, script_urls_by_family) = self.observation_urls()?;
         let mut statement = self.connection.prepare(
-            "SELECT f.id, s.structural_hash, s.hash, s.path,
-                    f.detector, f.category, f.start_line, f.start_column,
+            "SELECT f.id, s.path, f.detector, f.category, f.start_line, f.start_column,
                     f.end_line, f.end_column, f.snippet
              FROM findings f JOIN scripts s ON s.hash = f.hash
              WHERE s.representative = 1
@@ -202,43 +308,22 @@ impl Store {
         let mut rows = statement.query([])?;
         let mut findings = Vec::new();
         while let Some(row) = rows.next()? {
-            let structural_hash: String = row.get(1)?;
-            let hash: String = row.get(2)?;
-            let family = family_key(&structural_hash, &hash);
-            let page_urls = page_urls_by_family
-                .get(&family)
-                .cloned()
-                .unwrap_or_default();
-            let start_line: u32 = row.get(6)?;
-            let start_column: u32 = row.get(7)?;
-            let end_line: u32 = row.get(8)?;
-            let end_column: u32 = row.get(9)?;
+            let start_line: u32 = row.get(4)?;
+            let start_column: u32 = row.get(5)?;
+            let end_line: u32 = row.get(6)?;
+            let end_column: u32 = row.get(7)?;
             findings.push(ExportFinding {
                 id: row.get(0)?,
-                file: row.get(3)?,
+                file: row.get(1)?,
                 location: format!("L{start_line}:{start_column}-L{end_line}:{end_column}"),
-                script_urls: script_urls_by_family
-                    .get(&family)
-                    .cloned()
-                    .unwrap_or_default(),
-                detector: row.get(4)?,
-                category: row.get(5)?,
-                snippet: row.get(10)?,
-                page_urls,
+                detector: row.get(2)?,
+                category: row.get(3)?,
+                snippet: row.get(8)?,
             });
         }
 
         let mut csv = WriterBuilder::new().from_writer(Vec::new());
-        csv.write_record([
-            "id",
-            "file",
-            "location",
-            "sink",
-            "category",
-            "snippet",
-            "script_urls",
-            "page_urls",
-        ])?;
+        csv.write_record(["id", "file", "location", "sink", "category", "snippet"])?;
         for finding in &findings {
             csv.write_record([
                 finding.id.to_string(),
@@ -247,17 +332,10 @@ impl Store {
                 finding.detector.clone(),
                 finding.category.clone(),
                 finding.snippet.clone(),
-                finding.script_urls.join(" "),
-                finding.page_urls.join(" "),
             ])?;
         }
         let csv = csv.into_inner()?;
         atomic_write(&self.output.join("export/findings.csv"), &csv)?;
-        atomic_write(
-            &self.output.join("export/findings.json"),
-            &(serde_json::to_vec_pretty(&findings)?),
-        )?;
-
         let mut origins: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut statement = self.connection.prepare(
             "SELECT hash, structural_hash, path FROM scripts
@@ -446,6 +524,96 @@ fn family_key(structural_hash: &str, hash: &str) -> String {
     } else {
         structural_hash.to_owned()
     }
+}
+
+fn family_variant_count(
+    connection: &Connection,
+    structural_hash: &str,
+    content_hash: &str,
+) -> Result<usize> {
+    let count = if structural_hash.is_empty() {
+        connection.query_row(
+            "SELECT COUNT(*) FROM scripts WHERE hash = ?1",
+            [content_hash],
+            |row| row.get(0),
+        )?
+    } else {
+        connection.query_row(
+            "SELECT COUNT(*) FROM scripts WHERE structural_hash = ?1",
+            [structural_hash],
+            |row| row.get(0),
+        )?
+    };
+    Ok(count)
+}
+
+fn family_urls(
+    connection: &Connection,
+    structural_hash: &str,
+    content_hash: &str,
+    column: &str,
+) -> Result<Vec<String>> {
+    ensure!(matches!(column, "page_url" | "script_url"));
+    let family_filter = if structural_hash.is_empty() {
+        "s.hash = ?1"
+    } else {
+        "s.structural_hash = ?1"
+    };
+    let sql = format!(
+        "SELECT DISTINCT o.{column}
+         FROM observations o JOIN scripts s ON s.hash = o.hash
+         WHERE {family_filter} AND o.{column} <> ''
+         ORDER BY o.{column}"
+    );
+    let parameter = if structural_hash.is_empty() {
+        content_hash
+    } else {
+        structural_hash
+    };
+    let mut statement = connection.prepare(&sql)?;
+    let urls = statement
+        .query_map([parameter], |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(urls)
+}
+
+fn source_context(
+    source: &str,
+    start_offset: usize,
+    end_offset: usize,
+    context_chars: usize,
+) -> Result<FindingContext> {
+    ensure!(
+        start_offset <= end_offset
+            && end_offset <= source.len()
+            && source.is_char_boundary(start_offset)
+            && source.is_char_boundary(end_offset),
+        "finding offsets are outside the source or split a UTF-8 character"
+    );
+    let context_start = if context_chars == 0 {
+        start_offset
+    } else {
+        source[..start_offset]
+            .char_indices()
+            .rev()
+            .nth(context_chars - 1)
+            .map_or(0, |(offset, _)| offset)
+    };
+    let context_end = if context_chars == 0 {
+        end_offset
+    } else {
+        source[end_offset..]
+            .char_indices()
+            .nth(context_chars)
+            .map_or(source.len(), |(offset, _)| end_offset + offset)
+    };
+    Ok(FindingContext {
+        source: source[context_start..context_end].to_owned(),
+        finding_start: source[context_start..start_offset].chars().count(),
+        finding_end: source[context_start..end_offset].chars().count(),
+        truncated_before: context_start != 0,
+        truncated_after: context_end != source.len(),
+    })
 }
 
 fn path_string(path: &Path) -> String {

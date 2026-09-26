@@ -3,7 +3,7 @@ use std::fs;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sinksight_analysis::{analyze, Finding, FindingCategory};
-use sinksight_collector::store::{CapturedScript, Store};
+use sinksight_collector::store::{finding_details, CapturedScript, Store};
 
 fn content_hash(source: &str) -> String {
     format!("{:x}", Sha256::digest(source.as_bytes()))
@@ -47,11 +47,23 @@ fn exports_raw_source_and_every_observed_url() {
         source
     );
 
-    let findings: Value =
-        serde_json::from_slice(&fs::read(output.path().join("export/findings.json")).unwrap())
-            .unwrap();
-    assert_eq!(findings[0]["file"], file);
-    assert_eq!(findings[0]["scriptUrls"].as_array().unwrap().len(), 2);
+    let csv = fs::read_to_string(output.path().join("export/findings.csv")).unwrap();
+    assert_eq!(
+        csv.lines().next().unwrap(),
+        "id,file,location,sink,category,snippet"
+    );
+    assert!(!output.path().join("export/findings.json").exists());
+
+    let details = finding_details(output.path(), 1, 8).unwrap().unwrap();
+    assert_eq!(details.file, file);
+    assert_eq!(details.page_urls.len(), 2);
+    assert_eq!(details.script_urls.len(), 2);
+    assert!(details.context.source.contains("element.innerHTML = value"));
+    assert_eq!(
+        details.context.source[details.context.finding_start..details.context.finding_end]
+            .to_string(),
+        "element.innerHTML = value"
+    );
 }
 
 #[test]
@@ -67,6 +79,8 @@ fn preserves_variants_but_exports_only_the_first_representative() {
     second_result.findings.push(Finding {
         detector_name: "variant-only".to_owned(),
         category: FindingCategory::Sink,
+        start_offset: 0,
+        end_offset: 1,
         start_line: 1,
         start_column: 1,
         end_line: 1,
@@ -165,16 +179,40 @@ fn preserves_variants_but_exports_only_the_first_representative() {
     let representative = scripts[0]["file"].as_str().unwrap();
     assert!(representative.ends_with(&format!("/{first_hash}.js")));
 
-    let findings: Value =
-        serde_json::from_slice(&fs::read(output.path().join("export/findings.json")).unwrap())
-            .unwrap();
+    let csv = fs::read_to_string(output.path().join("export/findings.csv")).unwrap();
+    assert_eq!(csv.lines().count(), first_result.findings.len() + 1);
+    assert!(!output.path().join("export/findings.json").exists());
+}
+
+#[test]
+fn finding_context_counts_characters_without_splitting_utf8() {
+    let output = tempfile::tempdir().unwrap();
+    let source = "const label = 'é🙂'; element.innerHTML = value;\n";
+    let hash = content_hash(source);
+    let result = analyze(source, None);
+    let mut store = Store::open(output.path()).unwrap();
+    store
+        .save(CapturedScript {
+            hash: &hash,
+            source,
+            script_url: "https://example.test/unicode.js",
+            page_url: "https://example.test/",
+            result: &result,
+        })
+        .unwrap();
+
+    let details = finding_details(output.path(), 1, 3).unwrap().unwrap();
+    assert_eq!(details.context.finding_start, 3);
     assert_eq!(
-        findings.as_array().unwrap().len(),
-        first_result.findings.len()
+        details.context.source.chars().take(3).collect::<String>(),
+        "'; "
     );
-    assert!(findings
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|finding| finding["file"] == representative));
+    let finding: String = details
+        .context
+        .source
+        .chars()
+        .skip(details.context.finding_start)
+        .take(details.context.finding_end - details.context.finding_start)
+        .collect();
+    assert_eq!(finding, "element.innerHTML = value");
 }
