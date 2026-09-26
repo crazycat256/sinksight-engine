@@ -1,0 +1,21 @@
+{
+  "name": "@sinksight/engine",
+  "type": "module",
+  "description": "WebAssembly bindings for the SinkSight analysis engine.",
+  "version": "0.1.4",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/crazycat256/sinksight-engine"
+  },
+  "files": [
+    "sinksight_engine_bg.wasm",
+    "sinksight_engine.js",
+    "sinksight_engine.d.ts"
+  ],
+  "main": "sinksight_engine.js",
+  "types": "sinksight_engine.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
