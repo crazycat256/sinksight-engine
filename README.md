@@ -57,6 +57,19 @@ The command shows 500 source characters on either side of the finding and at
 most ten page and script URLs by default. Use `--context-chars`, `--all-urls`,
 or `--json` when more context or structured output is needed.
 
+Inspect a collected script by its stored path, absolute variant path, or content
+SHA-256. The output includes its structural family, variant counts, and origins:
+
+```text
+sinksight script variants/<structural-hash>/<sha256>.js --output /work/sinksight
+```
+
+Compute only the structural hash of any JavaScript file with:
+
+```text
+sinksight structural-hash file.js
+```
+
 ## Output
 
 - `variants/<structural-hash>/<sha256>.js`: every distinct JavaScript capture,

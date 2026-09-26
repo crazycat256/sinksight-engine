@@ -1380,6 +1380,7 @@ dependencies = [
  "anyhow",
  "clap",
  "serde_json",
+ "sinksight-analysis",
  "sinksight-collector",
  "tokio",
 ]

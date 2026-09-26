@@ -7,6 +7,7 @@ use anyhow::{ensure, Context, Result};
 use csv::WriterBuilder;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use sinksight_analysis::AnalyzeResult;
 type UrlIndex = BTreeMap<String, Vec<String>>;
 
@@ -31,9 +32,25 @@ pub struct FindingDetails {
     pub content_hash: String,
     pub representative: bool,
     pub variant_count: usize,
+    pub variants_with_different_findings: usize,
+    pub variant_analysis_errors: usize,
     pub page_urls: Vec<String>,
     pub script_urls: Vec<String>,
     pub context: FindingContext,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptDetails {
+    pub file: String,
+    pub structural_hash: String,
+    pub content_hash: String,
+    pub representative: bool,
+    pub variant_count: usize,
+    pub variants_with_different_findings: usize,
+    pub variant_analysis_errors: usize,
+    pub page_urls: Vec<String>,
+    pub script_urls: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -103,7 +120,7 @@ pub fn finding_details(
     else {
         return Ok(None);
     };
-    let variant_count = family_variant_count(&connection, &structural_hash, &content_hash)?;
+    let stats = family_stats_for(&connection, &structural_hash, &content_hash)?;
     let page_urls = family_urls(&connection, &structural_hash, &content_hash, "page_url")?;
     let script_urls = family_urls(&connection, &structural_hash, &content_hash, "script_url")?;
     let context = source_context(&source, start_offset, end_offset, context_chars)?;
@@ -117,10 +134,64 @@ pub fn finding_details(
         structural_hash,
         content_hash,
         representative,
-        variant_count,
+        variant_count: stats.variant_count,
+        variants_with_different_findings: stats.variants_with_different_findings,
+        variant_analysis_errors: stats.variant_analysis_errors,
         page_urls,
         script_urls,
         context,
+    }))
+}
+
+pub fn script_details(output: &Path, selector: &Path) -> Result<Option<ScriptDetails>> {
+    let connection = Connection::open_with_flags(
+        output.join("metadata.db"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("cannot open {}/metadata.db", output.display()))?;
+    let stored_path = selector
+        .strip_prefix(output)
+        .map_or_else(|_| path_string(selector), path_string);
+    let file_hash = selector
+        .is_file()
+        .then(|| fs::read(selector))
+        .transpose()
+        .with_context(|| format!("cannot read {}", selector.display()))?
+        .map(|source| format!("{:x}", Sha256::digest(source)));
+    let selector_text = selector.to_string_lossy();
+    let row = connection
+        .query_row(
+            "SELECT hash, structural_hash, path, representative
+             FROM scripts
+             WHERE hash = ?1 OR path = ?1 OR path = ?2 OR hash = ?3
+             ORDER BY CASE WHEN hash = ?1 THEN 0 WHEN path = ?1 THEN 1
+                           WHEN path = ?2 THEN 2 ELSE 3 END
+             LIMIT 1",
+            params![selector_text.as_ref(), stored_path, file_hash],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, bool>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((content_hash, structural_hash, file, representative)) = row else {
+        return Ok(None);
+    };
+    let stats = family_stats_for(&connection, &structural_hash, &content_hash)?;
+    Ok(Some(ScriptDetails {
+        file,
+        structural_hash: structural_hash.clone(),
+        content_hash: content_hash.clone(),
+        representative,
+        variant_count: stats.variant_count,
+        variants_with_different_findings: stats.variants_with_different_findings,
+        variant_analysis_errors: stats.variant_analysis_errors,
+        page_urls: family_urls(&connection, &structural_hash, &content_hash, "page_url")?,
+        script_urls: family_urls(&connection, &structural_hash, &content_hash, "script_url")?,
     }))
 }
 
@@ -526,25 +597,61 @@ fn family_key(structural_hash: &str, hash: &str) -> String {
     }
 }
 
-fn family_variant_count(
+fn family_stats_for(
     connection: &Connection,
     structural_hash: &str,
     content_hash: &str,
-) -> Result<usize> {
-    let count = if structural_hash.is_empty() {
-        connection.query_row(
-            "SELECT COUNT(*) FROM scripts WHERE hash = ?1",
-            [content_hash],
-            |row| row.get(0),
-        )?
+) -> Result<FamilyStats> {
+    let family_filter = if structural_hash.is_empty() {
+        "s.hash = ?1"
     } else {
-        connection.query_row(
-            "SELECT COUNT(*) FROM scripts WHERE structural_hash = ?1",
-            [structural_hash],
-            |row| row.get(0),
-        )?
+        "s.structural_hash = ?1"
     };
-    Ok(count)
+    let parameter = if structural_hash.is_empty() {
+        content_hash
+    } else {
+        structural_hash
+    };
+    let sql = format!(
+        "SELECT s.hash, s.representative, s.analysis_error, f.detector, f.category
+         FROM scripts s LEFT JOIN findings f ON f.hash = s.hash
+         WHERE {family_filter}
+         ORDER BY s.hash, f.id"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let mut rows = statement.query([parameter])?;
+    let mut by_hash: BTreeMap<String, Vec<FindingSignature>> = BTreeMap::new();
+    let mut representative = None;
+    let mut stats = FamilyStats::default();
+    while let Some(row) = rows.next()? {
+        let hash: String = row.get(0)?;
+        let signatures = by_hash.entry(hash.clone()).or_default();
+        if stats.seen_hashes.insert(hash.clone()) {
+            stats.variant_count += 1;
+            if row.get::<_, Option<String>>(2)?.is_some() {
+                stats.variant_analysis_errors += 1;
+            }
+        }
+        if row.get::<_, bool>(1)? {
+            representative = Some(hash);
+        }
+        if let Some(detector) = row.get::<_, Option<String>>(3)? {
+            signatures.push((detector, row.get(4)?));
+        }
+    }
+    for signatures in by_hash.values_mut() {
+        signatures.sort();
+    }
+    if let Some(representative) = representative {
+        let representative_findings = by_hash.get(&representative).cloned().unwrap_or_default();
+        stats.variants_with_different_findings = by_hash
+            .iter()
+            .filter(|(hash, findings)| {
+                **hash != representative && **findings != representative_findings
+            })
+            .count();
+    }
+    Ok(stats)
 }
 
 fn family_urls(

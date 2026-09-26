@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+use sinksight_analysis::structural_hash;
 use sinksight_collector::collector::{self, Config, Mode};
-use sinksight_collector::store::{finding_details, FindingDetails};
+use sinksight_collector::store::{finding_details, script_details, FindingDetails, ScriptDetails};
 use sinksight_collector::worker::Pool;
 
 #[derive(Parser)]
@@ -52,6 +53,22 @@ enum Command {
         /// Optional SinkSight library database.
         #[arg(long)]
         library_db: Option<PathBuf>,
+    },
+    /// Print the structural hash of one JavaScript file.
+    StructuralHash { path: PathBuf },
+    /// Show one collected script and its structural family.
+    Script {
+        /// Stored path, absolute variant path, or content SHA-256.
+        selector: PathBuf,
+        /// SinkSight output directory containing metadata.db.
+        #[arg(long)]
+        output: PathBuf,
+        /// Display every page and script URL instead of the first ten.
+        #[arg(long)]
+        all_urls: bool,
+        /// Print structured JSON instead of the agent-oriented text format.
+        #[arg(long)]
+        json: bool,
     },
     /// Show one stored finding with its origins and surrounding source.
     Finding {
@@ -104,6 +121,31 @@ async fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&analyzer.analyze(&source).await?)?
             );
+        }
+        Command::StructuralHash { path } => {
+            let source = tokio::fs::read_to_string(&path)
+                .await
+                .with_context(|| format!("cannot read {}", path.display()))?;
+            println!("{}", structural_hash(&source));
+        }
+        Command::Script {
+            selector,
+            output,
+            all_urls,
+            json,
+        } => {
+            let Some(details) = script_details(&output, &selector)? else {
+                bail!(
+                    "script {} does not exist in {}",
+                    selector.display(),
+                    output.display()
+                );
+            };
+            if json {
+                print_script_json(&details, all_urls)?;
+            } else {
+                print_script(&details, all_urls);
+            }
         }
         Command::Collect {
             devtools_active_port,
@@ -179,6 +221,71 @@ fn print_url_section(title: &str, urls: &[String], all_urls: bool) {
     }
 }
 
+fn print_variant_summary(
+    variant_count: usize,
+    variants_with_different_findings: usize,
+    variant_analysis_errors: usize,
+) {
+    println!("Family variants: {variant_count}");
+    if variant_count > 1 {
+        let other_count = variant_count - 1;
+        let suffix = if other_count == 1 {
+            "variant"
+        } else {
+            "variants"
+        };
+        println!(
+            "Variants: This script belongs to a family of {variant_count} distinct captures ({other_count} other {suffix})."
+        );
+    }
+    println!("Variants with different findings: {variants_with_different_findings}");
+    println!("Variant analysis errors: {variant_analysis_errors}");
+}
+
+fn print_script(details: &ScriptDetails, all_urls: bool) {
+    println!("File: {}", details.file);
+    println!("Content SHA-256: {}", details.content_hash);
+    if !details.structural_hash.is_empty() {
+        println!("Structural hash: {}", details.structural_hash);
+    }
+    println!("Representative: {}", details.representative);
+    print_variant_summary(
+        details.variant_count,
+        details.variants_with_different_findings,
+        details.variant_analysis_errors,
+    );
+    println!();
+    print_url_section("Pages", &details.page_urls, all_urls);
+    println!();
+    print_url_section("Script URLs", &details.script_urls, all_urls);
+}
+
+fn print_script_json(details: &ScriptDetails, all_urls: bool) -> Result<()> {
+    let (page_urls, omitted_pages) = visible_urls(&details.page_urls, all_urls);
+    let (script_urls, omitted_scripts) = visible_urls(&details.script_urls, all_urls);
+    let value = serde_json::json!({
+        "file": details.file,
+        "structuralHash": details.structural_hash,
+        "contentHash": details.content_hash,
+        "representative": details.representative,
+        "variantCount": details.variant_count,
+        "variantsWithDifferentFindings": details.variants_with_different_findings,
+        "variantAnalysisErrors": details.variant_analysis_errors,
+        "pageUrls": {
+            "items": page_urls,
+            "total": details.page_urls.len(),
+            "omitted": omitted_pages,
+        },
+        "scriptUrls": {
+            "items": script_urls,
+            "total": details.script_urls.len(),
+            "omitted": omitted_scripts,
+        },
+    });
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
 fn print_finding(details: &FindingDetails, context_chars: usize, all_urls: bool) {
     println!("Finding {}", details.id);
     println!("Sink: {}", details.detector);
@@ -190,7 +297,11 @@ fn print_finding(details: &FindingDetails, context_chars: usize, all_urls: bool)
         println!("Structural hash: {}", details.structural_hash);
     }
     println!("Representative: {}", details.representative);
-    println!("Family variants: {}", details.variant_count);
+    print_variant_summary(
+        details.variant_count,
+        details.variants_with_different_findings,
+        details.variant_analysis_errors,
+    );
     println!("Snippet: {}", details.snippet);
     println!();
     print_url_section("Pages", &details.page_urls, all_urls);
@@ -218,6 +329,8 @@ fn print_finding_json(details: &FindingDetails, all_urls: bool) -> Result<()> {
         "contentHash": details.content_hash,
         "representative": details.representative,
         "variantCount": details.variant_count,
+        "variantsWithDifferentFindings": details.variants_with_different_findings,
+        "variantAnalysisErrors": details.variant_analysis_errors,
         "pageUrls": {
             "items": page_urls,
             "total": details.page_urls.len(),

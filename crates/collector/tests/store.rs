@@ -1,9 +1,12 @@
 use std::fs;
+use std::path::Path;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sinksight_analysis::{analyze, Finding, FindingCategory};
-use sinksight_collector::store::{finding_details, CapturedScript, FindingDetails, Store};
+use sinksight_collector::store::{
+    finding_details, script_details, CapturedScript, FindingDetails, Store,
+};
 
 fn content_hash(source: &str) -> String {
     format!("{:x}", Sha256::digest(source.as_bytes()))
@@ -162,5 +165,27 @@ fn keeps_structural_variants_but_exports_only_the_representative() {
     assert_eq!(details.detector, "variant-only");
     assert!(!details.representative);
     assert_eq!(details.content_hash, second_hash);
+    assert_eq!(details.variant_count, 2);
+    assert_eq!(details.variants_with_different_findings, 1);
     assert_eq!(context_finding(&details), "w");
+
+    let script = script_details(output.path(), Path::new(representative))
+        .unwrap()
+        .unwrap();
+    assert_eq!(script.content_hash, first_hash);
+    assert_eq!(script.structural_hash, *family);
+    assert_eq!(script.variant_count, 2);
+    assert_eq!(script.variants_with_different_findings, 1);
+    assert_eq!(script.variant_analysis_errors, 0);
+
+    let absolute_variant = output
+        .path()
+        .join("variants")
+        .join(family)
+        .join(format!("{second_hash}.js"));
+    let variant = script_details(output.path(), &absolute_variant)
+        .unwrap()
+        .unwrap();
+    assert_eq!(variant.content_hash, second_hash);
+    assert!(!variant.representative);
 }

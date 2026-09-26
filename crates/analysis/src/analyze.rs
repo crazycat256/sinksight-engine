@@ -169,6 +169,29 @@ impl LineIndex {
     }
 }
 
+/// Compute the structural hash of JavaScript source without running detectors.
+pub fn structural_hash(source: &str) -> String {
+    #[cfg(not(target_family = "wasm"))]
+    let hash = stacker::grow(64 * 1024 * 1024, || structural_hash_source(source));
+
+    #[cfg(target_family = "wasm")]
+    let hash = structural_hash_source(source);
+
+    hash
+}
+
+fn structural_hash_source(source: &str) -> String {
+    let allocator = Allocator::default();
+    let parser_ret = Parser::new(&allocator, source, SourceType::unambiguous())
+        .with_options(ParseOptions {
+            allow_return_outside_function: true,
+            preserve_parens: false,
+            ..ParseOptions::default()
+        })
+        .parse();
+    structural_hash_of(&parser_ret.program)
+}
+
 /// Analyze JavaScript source. Optional `library_db` is raw `.slhdb` bytes.
 pub fn analyze(source: &str, library_db: Option<&[u8]>) -> AnalyzeResult {
     let analyzer = Analyzer::new(library_db).unwrap_or_else(|_| Analyzer { library_db: None });
