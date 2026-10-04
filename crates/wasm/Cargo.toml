@@ -14,6 +14,6 @@ crate-type = ["cdylib"]
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
-sinksight-analysis = { path = "../analysis" }
+sinksight-engine = { path = "../.." }
 tsify-next = { version = "0.5", features = ["wasm-bindgen"] }
 wasm-bindgen = "0.2"

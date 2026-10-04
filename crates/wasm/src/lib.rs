@@ -2,9 +2,7 @@ use serde::Serialize;
 use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
-use sinksight_analysis::{
-    AnalyzeResult as Analysis, Analyzer, FindingCategory as AnalysisCategory,
-};
+use sinksight_engine::{AnalyzeResult as Analysis, Analyzer, FindingCategory as AnalysisCategory};
 
 #[wasm_bindgen]
 pub struct Engine {
@@ -95,8 +93,8 @@ impl From<Analysis> for AnalyzeResult {
     }
 }
 
-impl From<sinksight_analysis::Finding> for Finding {
-    fn from(value: sinksight_analysis::Finding) -> Self {
+impl From<sinksight_engine::Finding> for Finding {
+    fn from(value: sinksight_engine::Finding) -> Self {
         Self {
             detector_name: value.detector_name,
             category: match value.category {
@@ -114,8 +112,8 @@ impl From<sinksight_analysis::Finding> for Finding {
     }
 }
 
-impl From<sinksight_analysis::LibraryCheck> for LibraryCheck {
-    fn from(value: sinksight_analysis::LibraryCheck) -> Self {
+impl From<sinksight_engine::LibraryCheck> for LibraryCheck {
+    fn from(value: sinksight_engine::LibraryCheck) -> Self {
         Self {
             whole_file: value
                 .whole_file
