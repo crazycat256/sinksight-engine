@@ -120,5 +120,5 @@ npm run build
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 or later.
+This project is licensed under the MIT License.
 See [LICENSE](LICENSE) for the full terms.
