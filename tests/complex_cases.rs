@@ -553,7 +553,7 @@ fn detects_unchecked_postmessage_handler_writing_to_dom() {
 }
 
 #[test]
-fn does_not_flag_postmessage_with_thorough_origin_validation() {
+fn flags_postmessage_with_thorough_origin_validation() {
     let code = r#"
         const ALLOWED = ["https://a.com", "https://b.com"];
         window.addEventListener("message", function(event) {
@@ -564,7 +564,7 @@ fn does_not_flag_postmessage_with_thorough_origin_validation() {
             }
         });
     "#;
-    assert_eq!(count_detector(code, "postMessage"), 0);
+    assert_eq!(count_detector(code, "postMessage"), 1);
 }
 
 #[test]

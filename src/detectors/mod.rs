@@ -283,11 +283,11 @@ mod tests {
     }
 
     #[test]
-    fn does_not_flag_post_message_handler_that_checks_origin() {
+    fn flags_post_message_handler_that_checks_origin() {
         let names = run(
             r#"window.addEventListener("message", function (e) { if (e.origin === "https://example.com") { doStuff(e.data); } });"#,
         );
-        assert!(names.is_empty(), "expected no matches, got {names:?}");
+        assert_eq!(names, vec!["postMessage"]);
     }
 
     #[test]

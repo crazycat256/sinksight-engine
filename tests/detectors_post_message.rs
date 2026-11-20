@@ -46,14 +46,14 @@ fn detects_unchecked_arrow_message_handler_without_window() {
 }
 
 #[test]
-fn ignores_global_style_handler_without_window_when_origin_is_checked() {
+fn detects_global_style_handler_without_window_when_origin_is_checked() {
     let code = r#"
         addEventListener("message", (event) => {
             if (event.origin !== "https://trusted.com") return;
             document.body.innerHTML = event.data;
         });
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 #[test]
@@ -84,7 +84,7 @@ fn ignores_shadowed_local_onmessage_identifier_assignment() {
 }
 
 #[test]
-fn ignores_handler_that_checks_event_origin_with_strict_eq() {
+fn detects_handler_that_checks_event_origin_with_strict_eq() {
     let code = r#"
         window.addEventListener("message", function(event) {
             if (event.origin === "https://trusted.com") {
@@ -92,22 +92,22 @@ fn ignores_handler_that_checks_event_origin_with_strict_eq() {
             }
         });
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 #[test]
-fn ignores_handler_that_checks_event_origin_with_strict_neq() {
+fn detects_handler_that_checks_event_origin_with_strict_neq() {
     let code = r#"
         window.addEventListener("message", function(event) {
             if (event.origin !== "https://trusted.com") return;
             document.body.innerHTML = event.data;
         });
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 #[test]
-fn ignores_handler_that_checks_event_source() {
+fn detects_handler_that_checks_event_source() {
     let code = r#"
         window.addEventListener("message", function(event) {
             if (event.source === window.parent) {
@@ -115,11 +115,11 @@ fn ignores_handler_that_checks_event_source() {
             }
         });
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 #[test]
-fn ignores_handler_with_origin_check_using_includes() {
+fn detects_handler_with_origin_check_using_includes() {
     let code = r#"
         window.addEventListener("message", function(event) {
             if (allowedOrigins.includes(event.origin)) {
@@ -127,11 +127,11 @@ fn ignores_handler_with_origin_check_using_includes() {
             }
         });
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 #[test]
-fn ignores_handler_with_origin_check_using_starts_with() {
+fn detects_handler_with_origin_check_using_starts_with() {
     let code = r#"
         window.addEventListener("message", function(event) {
             if (event.origin.startsWith("https://trusted")) {
@@ -139,7 +139,7 @@ fn ignores_handler_with_origin_check_using_starts_with() {
             }
         });
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn detects_unchecked_handler_passed_by_reference() {
 }
 
 #[test]
-fn ignores_handler_by_reference_that_checks_origin() {
+fn detects_handler_by_reference_that_checks_origin() {
     let code = r#"
         function handleMessage(event) {
             if (event.origin === "https://trusted.com") {
@@ -163,7 +163,7 @@ fn ignores_handler_by_reference_that_checks_origin() {
         }
         window.addEventListener("message", handleMessage);
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn detects_unchecked_bare_global_onmessage_assignment() {
 }
 
 #[test]
-fn ignores_onmessage_with_origin_check() {
+fn detects_onmessage_with_origin_check() {
     let code = r#"
         window.onmessage = function(event) {
             if (event.origin === "https://trusted.com") {
@@ -217,18 +217,18 @@ fn ignores_onmessage_with_origin_check() {
             }
         };
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 #[test]
-fn ignores_checked_bare_global_onmessage_assignment() {
+fn detects_checked_bare_global_onmessage_assignment() {
     let code = r#"
         onmessage = function(event) {
             if (event.origin !== "https://trusted.com") return;
             handleData(event.data);
         };
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 #[test]
@@ -253,7 +253,7 @@ fn detects_onmessage_with_reference_to_unchecked_function() {
 }
 
 #[test]
-fn ignores_onmessage_with_reference_to_checked_function() {
+fn detects_onmessage_with_reference_to_checked_function() {
     let code = r#"
         const handler = function(event) {
             if (event.origin === "https://example.com") {
@@ -262,13 +262,13 @@ fn ignores_onmessage_with_reference_to_checked_function() {
         };
         window.onmessage = handler;
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 // Switch on origin
 
 #[test]
-fn ignores_handler_with_switch_on_event_origin() {
+fn detects_handler_with_switch_on_event_origin() {
     let code = r#"
         window.addEventListener("message", function(event) {
             switch (event.origin) {
@@ -281,13 +281,13 @@ fn ignores_handler_with_switch_on_event_origin() {
             }
         });
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 // Logical expressions
 
 #[test]
-fn ignores_handler_with_logical_and_origin_check() {
+fn detects_handler_with_logical_and_origin_check() {
     let code = r#"
         window.addEventListener("message", function(event) {
             if (event.origin === "https://trusted.com" && event.data) {
@@ -295,10 +295,10 @@ fn ignores_handler_with_logical_and_origin_check() {
             }
         });
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
-// Logging the origin is not checking it
+// Origin references do not change whether a listener is an input source
 
 #[test]
 fn detects_handler_that_only_logs_the_event_origin() {
@@ -323,7 +323,7 @@ fn detects_handler_that_only_logs_the_origin_through_another_console_method() {
 }
 
 #[test]
-fn ignores_handler_that_logs_the_origin_and_also_checks_it() {
+fn detects_handler_that_logs_the_origin_and_also_checks_it() {
     let code = r#"
         window.addEventListener("message", function(event) {
             console.log("message from", event.origin);
@@ -331,18 +331,18 @@ fn ignores_handler_that_logs_the_origin_and_also_checks_it() {
             document.body.innerHTML = event.data;
         });
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 #[test]
-fn ignores_handler_that_passes_the_origin_to_a_non_console_validator() {
+fn detects_handler_that_passes_the_origin_to_a_non_console_validator() {
     let code = r#"
         window.addEventListener("message", function(event) {
             if (!isTrusted(event.origin)) return;
             document.body.innerHTML = event.data;
         });
     "#;
-    assert_eq!(count_detector(code, D), 0);
+    assert_eq!(count_detector(code, D), 1);
 }
 
 // Destructured event parameter
@@ -373,7 +373,7 @@ fn detects_multiple_unchecked_listeners_when_target_type_is_not_proven_safe() {
 }
 
 #[test]
-fn detects_only_unchecked_among_mixed_listeners() {
+fn detects_both_checked_and_unchecked_listeners() {
     let code = r#"
         window.addEventListener("message", (e) => {
             if (e.origin === "https://safe.com") handleData(e.data);
@@ -382,7 +382,7 @@ fn detects_only_unchecked_among_mixed_listeners() {
             eval(e.data);
         });
     "#;
-    assert_eq!(count_detector(code, D), 1);
+    assert_eq!(count_detector(code, D), 2);
 }
 
 #[test]
