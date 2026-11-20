@@ -1,6 +1,6 @@
 {
   "name": "@sinksight/engine",
-  "version": "0.1.4",
+  "version": "0.1.7",
   "description": "WebAssembly build of the SinkSight analysis engine.",
   "license": "MIT",
   "repository": {
